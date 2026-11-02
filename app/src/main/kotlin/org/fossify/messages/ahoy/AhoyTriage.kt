@@ -1,0 +1,148 @@
+package org.fossify.messages.ahoy
+
+import android.content.Context
+import android.util.Log
+import androidx.work.Constraints
+import androidx.work.ExistingWorkPolicy
+import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.OutOfQuotaPolicy
+import androidx.work.WorkManager
+import androidx.work.Worker
+import androidx.work.WorkerParameters
+import androidx.work.workDataOf
+import org.fossify.commons.extensions.getMyContactsCursor
+import org.fossify.commons.helpers.ContactLookupResult
+import org.fossify.commons.helpers.SimpleContactsHelper
+import org.fossify.messages.extensions.getMessages
+import org.fossify.messages.extensions.getNameFromAddress
+import org.fossify.messages.extensions.getSmsDraft
+import org.fossify.messages.extensions.getThreadParticipants
+import org.fossify.messages.extensions.saveSmsDraft
+import org.fossify.messages.helpers.refreshConversations
+import org.greenrobot.eventbus.EventBus
+
+/** What the phone does with sms-triage: sort incoming texts, fetch drafts, send conversations for review. */
+object AhoyTriage {
+    private const val TAG = "AhoyTriage"
+    private const val THREAD_LINES = 20
+
+    /**
+     * Sorts one incoming text. Returns true if it was filtered as spam/advertising, in which case the
+     * caller skips the notification. Anything going wrong (no network, server down, no key) lets the
+     * text through as normal: a missed filter is better than a missed customer.
+     */
+    fun onIncoming(context: Context, threadId: Long, address: String, body: String): Boolean {
+        val store = AhoyStore.get(context)
+        if (!store.isConfigured) return false
+        return try {
+            val (name, isContact) = sender(context, address)
+            val result = store.client().incoming(address, if (isContact) name else "", isContact, body,
+                recentThread(context, threadId))
+            val filtered = result.optBoolean("filtered")
+            store.setFiltered(threadId, filtered)
+            Log.i(TAG, "thread $threadId: ${result.optString("category")}${if (filtered) ", filtered" else ""}")
+            if (!filtered && result.optBoolean("draft")) requestDraft(context, threadId)
+            filtered
+        } catch (e: Exception) {
+            Log.w(TAG, "sorting failed, letting the text through: $e")
+            false
+        }
+    }
+
+    /** Queues a draft for a conversation; the thread shows a spinner until it arrives. */
+    fun requestDraft(context: Context, threadId: Long) {
+        AhoyStore.get(context).setDraftPending(threadId, true)
+        EventBus.getDefault().post(DraftStateChanged(threadId))
+        val request = OneTimeWorkRequestBuilder<DraftWorker>()
+            .setInputData(workDataOf(DraftWorker.THREAD_ID to threadId))
+            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+            .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+            .build()
+        WorkManager.getInstance(context).enqueueUniqueWork("draft-$threadId", ExistingWorkPolicy.REPLACE, request)
+    }
+
+    /** Sends a whole conversation for the server to learn context and writing style from. */
+    fun review(context: Context, threadId: Long): String {
+        val (address, name) = threadContact(context, threadId)
+        val messages = context.getMessages(threadId, includeScheduledMessages = false, limit = 2000)
+            .sortedBy { it.date }
+            .filter { it.body.isNotBlank() }
+            .map { ThreadLine(fromMe = !it.isReceivedMessage(), body = it.body) }
+        val result = AhoyStore.get(context).client().review(address, name, messages)
+        return result.optString("summary")
+    }
+
+    fun forget(context: Context, threadId: Long) {
+        val (address, _) = threadContact(context, threadId)
+        AhoyStore.get(context).client().forget(address)
+    }
+
+    /** The other person's number and (if saved) name; only one-to-one conversations are supported. */
+    fun threadContact(context: Context, threadId: Long): Pair<String, String> {
+        val participants = context.getThreadParticipants(threadId, null)
+        val contact = participants.singleOrNull()
+            ?: throw IllegalStateException("Drafts and reviews only work in one-to-one conversations")
+        val address = contact.phoneNumbers.firstOrNull()?.normalizedNumber?.ifBlank { null }
+            ?: contact.phoneNumbers.first().value
+        val (name, isContact) = sender(context, address)
+        return address to if (isContact) name else ""
+    }
+
+    fun recentThread(context: Context, threadId: Long): List<ThreadLine> =
+        context.getMessages(threadId, includeScheduledMessages = false, limit = THREAD_LINES)
+            .sortedBy { it.date }
+            .filter { it.body.isNotBlank() }
+            .takeLast(THREAD_LINES)
+            .map { ThreadLine(fromMe = !it.isReceivedMessage(), body = it.body) }
+
+    private fun sender(context: Context, address: String): Pair<String, Boolean> {
+        val cursor = context.getMyContactsCursor(favoritesOnly = false, withPhoneNumbersOnly = true)
+        val inContacts = SimpleContactsHelper(context).existsSync(address, cursor) != ContactLookupResult.NotFound
+        val name = context.getMyContactsCursor(favoritesOnly = false, withPhoneNumbersOnly = true).use {
+            context.getNameFromAddress(address, it)
+        }
+        return name to (inContacts || name != address)
+    }
+}
+
+/** Posted when a thread's draft starts or finishes, so an open thread can update its spinner. */
+data class DraftStateChanged(val threadId: Long)
+
+class DraftWorker(context: Context, params: WorkerParameters) : Worker(context, params) {
+
+    override fun doWork(): Result {
+        val threadId = inputData.getLong(THREAD_ID, 0L)
+        val store = AhoyStore.get(applicationContext)
+        return try {
+            val (address, name) = AhoyTriage.threadContact(applicationContext, threadId)
+            val draft = store.client().draft(address, name, AhoyTriage.recentThread(applicationContext, threadId))
+            // Never overwrite something the user has typed (an earlier suggestion is fine to replace)
+            val existing = applicationContext.getSmsDraft(threadId)
+            if (draft.isNotBlank() && (existing.isEmpty() || existing == store.suggestedDraft(threadId))) {
+                applicationContext.saveSmsDraft(draft, threadId)
+                store.setSuggestedDraft(threadId, draft)
+            }
+            finish(store, threadId)
+            Result.success()
+        } catch (e: Exception) {
+            Log.w("DraftWorker", "draft for thread $threadId failed: $e")
+            if (runAttemptCount < 2 && e is java.io.IOException && e !is AhoyClient.Refused) {
+                Result.retry()
+            } else {
+                finish(store, threadId)
+                Result.failure()
+            }
+        }
+    }
+
+    private fun finish(store: AhoyStore, threadId: Long) {
+        store.setDraftPending(threadId, false)
+        refreshConversations()
+        EventBus.getDefault().post(DraftStateChanged(threadId))
+    }
+
+    companion object {
+        const val THREAD_ID = "thread_id"
+    }
+}

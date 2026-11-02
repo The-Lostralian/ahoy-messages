@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Ahoy additions; English only, kept apart from Fossify's translated strings -->
+<resources xmlns:tools="http://schemas.android.com/tools" tools:ignore="MissingTranslation">
+    <string name="ahoy_app_name">Ahoy Messages</string>
+
+    <!-- Drafts -->
+    <string name="ahoy_writing_draft">Writing a reply draft…</string>
+    <string name="ahoy_suggested_draft">Suggested reply: edit it, or clear it</string>
+    <string name="ahoy_clear_draft">Clear suggested reply</string>
+    <string name="ahoy_draft_reply">Draft a reply</string>
+    <string name="ahoy_draft_failed">Couldn\'t get a draft: %s</string>
+
+    <!-- Review -->
+    <string name="ahoy_send_for_review">Send for style review</string>
+    <string name="ahoy_review_confirm">Send this whole conversation to your server so drafts can learn from it? Only your server stores it.</string>
+    <string name="ahoy_reviewing">Reviewing the conversation, this can take a minute…</string>
+    <string name="ahoy_review_done">Reviewed. Notes: %s</string>
+    <string name="ahoy_forget_review">Forget review</string>
+    <string name="ahoy_forget_confirm">Delete what your server learned from this conversation?</string>
+    <string name="ahoy_forgotten">Forgotten</string>
+    <string name="ahoy_failed">Failed: %s</string>
+    <string name="ahoy_one_to_one_only">Only works in one-to-one conversations</string>
+
+    <!-- Filtering -->
+    <string name="ahoy_filtered">Filtered</string>
+    <string name="ahoy_show_filtered">Show filtered (spam and ads)</string>
+    <string name="ahoy_no_filtered">Nothing filtered</string>
+    <string name="ahoy_not_spam">Not spam</string>
+    <string name="ahoy_move_to_filtered">Move to Filtered</string>
+
+    <!-- Settings -->
+    <string name="ahoy_server_settings">Ahoy server</string>
+    <string name="ahoy_enabled">Filter spam and write drafts with my server</string>
+    <string name="ahoy_server_url">Server address</string>
+    <string name="ahoy_server_url_hint">https://sms.example.com</string>
+    <string name="ahoy_key">Shared key (SMS_SHARED_KEY)</string>
+    <string name="ahoy_key_hint">Paste the key from the comm-stack .env</string>
+    <string name="ahoy_save_and_test">Save and test</string>
+    <string name="ahoy_testing">Testing…</string>
+    <string name="ahoy_test_ok">Connected: the server accepted the key</string>
+    <string name="ahoy_key_invalid">That key isn\'t 32 bytes of base64</string>
+</resources>

@@ -12,6 +12,7 @@ import org.fossify.commons.helpers.SimpleContactsHelper
 import org.fossify.commons.helpers.ensureBackgroundThread
 import org.fossify.commons.models.PhoneNumber
 import org.fossify.commons.models.SimpleContact
+import org.fossify.messages.ahoy.AhoyTriage
 import org.fossify.messages.extensions.getConversations
 import org.fossify.messages.extensions.getNameFromAddress
 import org.fossify.messages.extensions.getNotificationBitmap
@@ -141,8 +142,13 @@ class SmsReceiver : BroadcastReceiver() {
             context.updateConversationArchivedStatus(threadId, false)
         }
 
+        // Ahoy: sort the text on the home server; spam and advertising are filed under Filtered
+        // without a notification (the text itself is kept)
+        val filtered = AhoyTriage.onIncoming(context, threadId, address, body)
+
         refreshMessages()
         refreshConversations()
+        if (filtered) return
         context.showReceivedMessageNotification(
             messageId = newMessageId,
             isMms = false,

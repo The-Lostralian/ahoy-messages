@@ -50,6 +50,31 @@
         android:title="@string/mark_as_unread"
         app:showAsAction="never" />
     <item
+        android:id="@+id/ahoy_draft_reply"
+        android:showAsAction="never"
+        android:title="@string/ahoy_draft_reply"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/ahoy_send_for_review"
+        android:showAsAction="never"
+        android:title="@string/ahoy_send_for_review"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/ahoy_forget_review"
+        android:showAsAction="never"
+        android:title="@string/ahoy_forget_review"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/ahoy_not_spam"
+        android:showAsAction="never"
+        android:title="@string/ahoy_not_spam"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/ahoy_move_to_filtered"
+        android:showAsAction="never"
+        android:title="@string/ahoy_move_to_filtered"
+        app:showAsAction="never" />
+    <item
         android:id="@+id/block_number"
         android:showAsAction="never"
         android:title="@string/block_number"

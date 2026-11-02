@@ -103,6 +103,8 @@ import org.fossify.commons.models.RadioItem
 import org.fossify.commons.models.SimpleContact
 import org.fossify.messages.BuildConfig
 import org.fossify.messages.R
+import org.fossify.messages.ahoy.AhoyThreadUi
+import org.fossify.messages.ahoy.DraftStateChanged
 import org.fossify.messages.adapters.AttachmentsAdapter
 import org.fossify.messages.adapters.AutoCompleteTextViewAdapter
 import org.fossify.messages.adapters.ThreadAdapter
@@ -232,6 +234,11 @@ class ThreadActivity : SimpleActivity() {
 
     private val binding by viewBinding(ActivityThreadBinding::inflate)
 
+    // Ahoy: draft bar and extra menu items
+    private val ahoyUi by lazy {
+        AhoyThreadUi(this, binding.messageHolder, threadId = { threadId }, onMenuChanged = { refreshMenuItems() })
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         finish()
@@ -305,6 +312,7 @@ class ThreadActivity : SimpleActivity() {
             }
 
             markThreadMessagesRead(threadId)
+            runOnUiThread { ahoyUi.updateDraftBar() }
         }
 
         val bottomBarColor = getBottomBarColor()
@@ -377,6 +385,8 @@ class ThreadActivity : SimpleActivity() {
                 participants.size == 1 && participants.first().name == firstPhoneNumber && !isRecycleBin
             findItem(R.id.copy_number).isVisible =
                 participants.size == 1 && !firstPhoneNumber.isNullOrEmpty() && !isRecycleBin
+
+            ahoyUi.refreshMenu(this, oneToOne = participants.size == 1 && !isRecycleBin)
         }
     }
 
@@ -401,7 +411,7 @@ class ThreadActivity : SimpleActivity() {
             R.id.dial_number -> dialNumber()
             R.id.manage_people -> managePeople()
             R.id.mark_as_unread -> markAsUnread()
-            else -> return false
+            else -> return ahoyUi.handleMenuItem(menuItem.itemId)
         }
 
         return true
@@ -887,6 +897,7 @@ class ThreadActivity : SimpleActivity() {
 
             threadSendMessage.isClickable = false
             threadTypeMessage.onTextChangeListener {
+                ahoyUi.updateDraftBar()
                 messageToResend = null
                 checkSendMessageAvailability()
                 val messageString = if (config.useSimpleCharacters) {
@@ -1851,6 +1862,11 @@ class ThreadActivity : SimpleActivity() {
                 )
             }
         }
+    }
+
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    fun ahoyDraftStateChanged(event: DraftStateChanged) {
+        ahoyUi.onDraftStateChanged(event)
     }
 
     @Subscribe(threadMode = ThreadMode.ASYNC)

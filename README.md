@@ -1,44 +1,143 @@
-# Fossify Messages
+# Ahoy Messages
 <img alt="Logo" src="graphics/icon.webp" width="120" />
 
-<a href='https://play.google.com/store/apps/details?id=org.fossify.messages'><img alt='Get it on Google Play' src='https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png' height=80/></a> <a href="https://f-droid.org/packages/org.fossify.messages/"><img src="https://fdroid.gitlab.io/artwork/badge/get-it-on-en.svg" alt="Get it on F-Droid" height=80/></a> <a href="https://apt.izzysoft.de/fdroid/index/apk/org.fossify.messages"><img src="https://gitlab.com/IzzyOnDroid/repo/-/raw/master/assets/IzzyOnDroid.png" alt="Get it on IzzyOnDroid" height=80/></a>
+> [!WARNING]
+> **Beta, and vibe-coded.** This is a personal project: a fork of [Fossify Messages](https://github.com/FossifyOrg/Messages)
+> with an AI add-on, built with Claude Code for one tradie's phone and home server. It has been tested on an
+> Android emulator and is being trialled on a Pixel running GrapheneOS, but it hasn't had a proper code
+> review. It is **not** made or endorsed by Fossify; please don't report its bugs to them.
 
-Fossify Messages is your trusted messaging companion, designed to enhance your messaging experience in various ways.
+Ahoy Messages is an SMS app for a small business owner whose work and personal texts arrive on the same phone.
+It is Fossify Messages (a plain, private, open-source SMS app) plus a connection to **your own server**, which
+runs a small local AI model to:
 
-**📱 STAY CONNECTED WITH EASE:**  
-With Fossify Messages, you can effortlessly send SMS and MMS messages to stay connected with your loved ones. Enjoy SMS/MMS based group messaging and express yourself with photos, emojis, and quick greetings.
+- **Filter spam and ads.** Scam texts, promotions and wrong-number openers from strangers go to a
+  *Filtered* list without a notification. Texts from your contacts always come straight through, and one-time
+  codes are never filtered.
+- **Flag work.** Quote requests and texts from customers are pushed to [ntfy](https://ntfy.sh), so they reach
+  your other devices with a short summary.
+- **Draft replies.** A suggested reply is written into the reply box, with a spinner while it's on its way.
+  It is never sent for you: edit it, or clear it with one tap.
+- **Learn your style.** Send a whole conversation for review and the server keeps notes on that person and
+  examples of how you write, so later drafts sound like you. One tap forgets it again.
 
-**🚫 BLOCK UNWANTED MESSAGES:**  
-Take control of your messaging experience with a robust blocking feature, easily preventing unwanted messages, even from unknown contacts. You can also export and import blocked numbers for hassle-free backup. Additionally, customize your experience by preventing messages with specific words or phrases from reaching your inbox.
+Your texts never go to a cloud AI service. The phone talks only to your server, and every request is
+encrypted with a key that only the phone and the server have, so it's safe to put the server behind a proxy
+such as Cloudflare. If the server can't be reached, the app behaves like a normal SMS app.
 
-**🔒 EFFORTLESS SMS BACKUP:**  
-Say goodbye to worries about losing important messages. Fossify Messages offers convenient SMS backup functionality by allowing you to export and import your messages. This feature ensures that you can easily switch devices without losing your valuable conversations.
-
-**🚀 LIGHTNING-FAST AND LIGHTWEIGHT:**  
-Despite its powerful features, Fossify Messages boasts a remarkably small app size, making it quick and easy to download and install. Experience speed and efficiency while enjoying the peace of mind that comes with SMS backup.
-
-**🔐 ENHANCED PRIVACY:**  
-Customize what appears on your lock screen for added privacy. Choose to display only the sender, message content, or nothing at all. Your messages are in your control.
-
-**🔍 EFFICIENT MESSAGE SEARCH:**  
-Say goodbye to endless scrolling through conversations. Fossify Messages simplifies message retrieval with a quick and efficient search feature. Find what you need, when you need it.
-
-**🌈 MODERN DESIGN & USER-FRIENDLY INTERFACE:**  
-Enjoy a clean, modern design with a user-friendly interface. The app features a material design and a dark theme option, providing a visually appealing and comfortable user experience.
-
-**🌐 OPEN-SOURCE TRANSPARENCY:**  
-Your privacy is a top priority. Fossify Messages operates without requiring an internet connection, guaranteeing message security and stability. Our app is completely free of ads and does not request unnecessary permissions. Moreover, it is fully open-source, providing you with peace of mind, as you have access to the source code for security and privacy audits.
-
-Make the switch to Fossify Messages and experience messaging the way it should be – private, efficient, and user-friendly. Download now and join our community committed to safeguarding your messaging experience.
-
-➡️ Explore more Fossify apps: https://www.fossify.org<br>
-➡️ Open-Source Code: https://www.github.com/FossifyOrg<br>
-➡️ Join the community on Reddit: https://www.reddit.com/r/Fossify<br>
-➡️ Connect on Telegram: https://t.me/Fossify
+It works on de-Googled phones: no Google Play Services, no Play Integrity, no Firebase.
 
 <div align="center">
-<img alt="App image" src="fastlane/metadata/android/en-US/images/phoneScreenshots/1_en-US.png" width="30%">
-<img alt="App image" src="fastlane/metadata/android/en-US/images/phoneScreenshots/2_en-US.png" width="30%">
-<img alt="App image" src="fastlane/metadata/android/en-US/images/phoneScreenshots/3_en-US.png" width="30%">
+<img alt="A draft being written, then suggested in the reply box" src="docs/draft.png" width="45%">
+<img alt="The Filtered list" src="docs/filtered.png" width="25%">
 </div>
 
+## How it fits together
+
+```
+ Phone (Ahoy Messages)                  Your server (Docker)
+ ─────────────────────                  ─────────────────────────────────────────
+ SMS arrives ──► encrypted POST ──────► sms-triage ──► Ollama (qwen3:4b on the GPU)
+                 (through your                │
+                  reverse proxy)              ├──► ntfy: "Quote request (text)"
+ ◄── filtered? draft coming? ◄────────────────┘
+ Draft request ──────────────────────► writes a reply in your style
+ ◄── suggested reply into the box ◄───
+```
+
+The same server container can also sort email (`mail-triage`, reading IMAP, for example through Proton
+Bridge) with the same model and ntfy topics. That part is optional.
+
+## What the server needs
+
+- **Docker** with Docker Compose.
+- **[Ollama](https://ollama.com)**, ideally with an NVIDIA GPU. It's developed on an **NVIDIA T1000 (4 GB)**,
+  which fits the model it uses, **`qwen3:4b`**, with thinking switched off and a 4096-token context. Other
+  small models can work too; set `OLLAMA_MODEL`. CPU-only works, but expect slow drafts.
+- **[ntfy](https://ntfy.sh)** (self-hosted or ntfy.sh) for the alerts, with a token that can publish to the
+  `ahoy-quote` and `ahoy-webmsg` topics.
+- **A reverse proxy with HTTPS**, so the phone can reach the server from anywhere. There's an Apache example
+  in `server/apache-sms.example.conf`.
+- For email sorting only: an IMAP server (Proton Bridge works) and optionally a CardDAV address book such as
+  Radicale, so mail from your contacts always comes through.
+
+## Setting up the server
+
+1. Copy the `server` folder to your server.
+2. Make your config from the examples:
+   ```bash
+   cp docker-compose.example.yml docker-compose.yml
+   cp .env.example .env
+   ```
+3. Make the shared key, put it in `.env` as `SMS_SHARED_KEY`, and fill in the rest of `.env`:
+   ```bash
+   openssl rand -base64 32
+   ```
+4. Point `OLLAMA_URL` in `docker-compose.yml` at your Ollama and pull the model:
+   ```bash
+   docker exec ollama ollama pull qwen3:4b
+   ```
+5. Optional but recommended: write your own prompts (your business, your area, how you write) in a
+   `prompts` folder. See [`server/prompts.example`](server/prompts.example/README.md). Without them the
+   server uses generic prompts for "a small local business".
+6. Start it:
+   ```bash
+   docker compose up -d --build
+   ```
+7. Put it behind your reverse proxy at a hostname like `sms.example.com`, letting through only `POST` to
+   `/sms/incoming`, `/sms/draft`, `/sms/review` and `/sms/forget`.
+
+`GET /health` on the container answers `ok`, for monitoring (for example an Uptime Kuma HTTP check).
+`server/sms_client.py` is a command-line client for testing the server before setting up the phone.
+
+## Setting up the phone
+
+1. Install the APK from [Releases](../../releases), or add this repository's URL to
+   [Obtainium](https://github.com/ImranR98/Obtainium) to get updates automatically.
+2. On GrapheneOS, allow the app's **Network** permission (Settings → Apps → Ahoy Messages → Permissions).
+   It needs it to reach your server.
+3. Open the app, then ⋮ → **Ahoy server**. Enter your server address (`https://sms.example.com`) and the
+   shared key, then tap **Save and test**. It should say *Connected*.
+4. Make it your default SMS app when you're ready. You can try it alongside another SMS app first.
+
+In a conversation, ⋮ has **Draft a reply**, **Send for style review**, **Forget review**, and
+**Move to Filtered** / **Not spam**. The main menu has **Show filtered (spam and ads)**.
+
+## Known limits
+
+- **Beta.** Expect rough edges.
+- Picture messages (MMS) aren't sorted or drafted for, only SMS.
+- Drafts and reviews only work in one-to-one conversations.
+- The shared key is stored in the app's private storage without extra encryption.
+- The server keeps notes from reviewed conversations and your example texts on disk (`/state`). Incoming
+  texts and drafts are not stored, and message text is never logged.
+
+## Building from source
+
+Android Studio (or JDK 21 and the Android SDK), then:
+
+```bash
+./gradlew :app:assembleFossDebug
+```
+
+Release builds are signed using a `keystore.properties` file in the project root (see
+`keystore.properties_sample`), which is never committed.
+
+## Changes from Fossify Messages
+
+Forked from Fossify Messages 1.10.2 (tag `1.10.2`) in November 2026. Changes:
+
+- New: everything in `app/src/main/kotlin/org/fossify/messages/ahoy/`, the settings screen layout,
+  `ahoy_strings.xml`, and the `server/` folder.
+- Changed: the incoming SMS receiver (asks the server before notifying), the main and archived conversation
+  screens (the Filtered list), the conversation screen (draft bar and menu), menus, the manifest (internet
+  permission, app name), the launcher icon, version numbering and the package name
+  (`au.com.ahoyhandyman.messages`).
+- Removed: Fossify's warning about unofficial builds, the About screen (it points to Fossify's support and
+  donation pages), and Fossify's CI, store listings and issue templates.
+
+## License
+
+GPL-3.0, the same as Fossify Messages: see [LICENSE](LICENSE). All credit for the messaging app itself goes to
+[Fossify](https://www.fossify.org) and the Simple Mobile Tools contributors before them. If you want a
+private SMS app without the AI parts, use [Fossify Messages](https://github.com/FossifyOrg/Messages).

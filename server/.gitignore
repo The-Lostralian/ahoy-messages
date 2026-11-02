@@ -1,0 +1,6 @@
+state/
+__pycache__/
+# your own copies: secrets, prompts and compose stay private
+.env
+prompts/
+docker-compose.yml

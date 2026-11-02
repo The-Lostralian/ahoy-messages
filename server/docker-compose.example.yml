@@ -1,0 +1,72 @@
+# Example compose file for the Ahoy Messages server. Copy to docker-compose.yml, copy .env.example
+# to .env and fill it in, then: docker compose up -d --build
+#
+# Needs an Ollama container (or install) the services can reach, with the model pulled:
+#   docker exec ollama ollama pull qwen3:4b
+# and an ntfy server for the alerts. Both are left out here because most people already run them.
+
+services:
+  # Server side of the SMS app: sorts incoming texts, alerts ntfy for quotes and customer texts,
+  # and writes reply drafts (it never sends anything).
+  sms-triage:
+    build:
+      context: .
+    container_name: sms-triage
+    command: ["python", "sms.py"]
+    restart: unless-stopped
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TZ=${TZ}
+      - SMS_KEY=${SMS_SHARED_KEY}
+      - OWNER_NAME=${OWNER_NAME}
+      - OLLAMA_URL=http://ollama:11434
+      - OLLAMA_MODEL=qwen3:4b
+      - OLLAMA_THINK=false
+      - OLLAMA_NUM_CTX=4096
+      - NTFY_URL=${NTFY_URL}
+      - NTFY_TOKEN=${NTFY_TOKEN}
+      - NTFY_QUOTE_TOPIC=ahoy-quote
+      - NTFY_MESSAGE_TOPIC=ahoy-webmsg
+    ports:
+      - "127.0.0.1:8098:8080"   # only your reverse proxy should reach this
+    volumes:
+      - sms_triage_state:/state
+      - ./prompts:/prompts:ro   # optional: your own prompts (see prompts.example/)
+
+  # Optional: the same sorting for email, read over IMAP (for example through Proton Bridge).
+  # Contacts come from a CardDAV server such as Radicale. Delete this service if you only want texts.
+  mail-triage:
+    build:
+      context: .
+    container_name: mail-triage
+    restart: unless-stopped
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TZ=${TZ}
+      - IMAP_HOST=${IMAP_HOST}
+      - IMAP_PORT=143
+      - IMAP_ACCOUNTS=main
+      - IMAP_MAIN_USER=${IMAP_MAIN_USER}
+      - IMAP_MAIN_PASS=${IMAP_MAIN_PASS}
+      - RADICALE_URL=${RADICALE_URL}
+      - RADICALE_USER=${RADICALE_USER}
+      - RADICALE_PASS=${RADICALE_PASS}
+      - CONTACT_BOOKS=${RADICALE_CONTACT_BOOKS}
+      - OWNER_NAME=${OWNER_NAME}
+      - OLLAMA_URL=http://ollama:11434
+      - OLLAMA_MODEL=qwen3:4b
+      - OLLAMA_THINK=false
+      - OLLAMA_NUM_CTX=4096   # same as sms-triage, so Ollama doesn't reload the model between them
+      - NTFY_URL=${NTFY_URL}
+      - NTFY_TOKEN=${NTFY_TOKEN}
+      - NTFY_QUOTE_TOPIC=ahoy-quote
+      - NTFY_MESSAGE_TOPIC=ahoy-webmsg
+      - OWN_DOMAINS=${OWN_DOMAINS}
+      - KUMA_PUSH_URL=${KUMA_PUSH_URL}
+    volumes:
+      - mail_triage_state:/state
+      - ./prompts:/prompts:ro
+
+volumes:
+  sms_triage_state:
+  mail_triage_state:

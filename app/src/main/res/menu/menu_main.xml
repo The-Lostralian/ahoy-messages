@@ -14,13 +14,25 @@
         android:title="@string/show_archived_conversations"
         app:showAsAction="never" />
     <item
+        android:id="@+id/ahoy_show_filtered"
+        android:showAsAction="never"
+        android:title="@string/ahoy_show_filtered"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/ahoy_settings"
+        android:showAsAction="never"
+        android:title="@string/ahoy_server_settings"
+        app:showAsAction="never" />
+    <item
         android:id="@+id/settings"
         android:icon="@drawable/ic_settings_cog_vector"
         android:showAsAction="never"
         android:title="@string/settings"
         app:showAsAction="never" />
+    <!-- Ahoy: hidden, Fossify's About screen links to their bug tracker, donations and store pages -->
     <item
         android:id="@+id/about"
+        android:visible="false"
         android:icon="@drawable/ic_info_vector"
         android:showAsAction="never"
         android:title="@string/about"

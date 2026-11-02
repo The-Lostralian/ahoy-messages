@@ -24,15 +24,15 @@ fun hasSigningVars(): Boolean {
 }
 
 base {
-    val versionCode = project.property("VERSION_CODE").toString().toInt()
-    archivesName = "messages-$versionCode"
+    archivesName = "ahoy-messages-${project.property("VERSION_NAME")}"
 }
 
 android {
     compileSdk = project.libs.versions.app.build.compileSDKVersion.get().toInt()
 
     defaultConfig {
-        applicationId = project.property("APP_ID").toString()
+        // Ahoy: own install id so it sits beside Fossify Messages (the code keeps Fossify's namespace)
+        applicationId = "au.com.ahoyhandyman.messages"
         minSdk = project.libs.versions.app.build.minimumSDK.get().toInt()
         targetSdk = project.libs.versions.app.build.targetSDK.get().toInt()
         versionName = project.property("VERSION_NAME").toString()
@@ -151,6 +151,7 @@ dependencies {
     implementation(libs.ez.vcard)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.bundles.room)
+    implementation(libs.androidx.work.runtime.ktx)
     ksp(libs.androidx.room.compiler)
     detektPlugins(libs.compose.detekt)
 }

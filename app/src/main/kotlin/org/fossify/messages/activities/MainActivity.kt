@@ -21,7 +21,6 @@ import org.fossify.commons.extensions.beGone
 import org.fossify.commons.extensions.beGoneIf
 import org.fossify.commons.extensions.beVisible
 import org.fossify.commons.extensions.beVisibleIf
-import org.fossify.commons.extensions.checkAppSideloading
 import org.fossify.commons.extensions.checkWhatsNew
 import org.fossify.commons.extensions.convertToBitmap
 import org.fossify.commons.extensions.fadeIn
@@ -51,6 +50,9 @@ import org.fossify.commons.models.FAQItem
 import org.fossify.commons.models.Release
 import org.fossify.messages.BuildConfig
 import org.fossify.messages.R
+import org.fossify.messages.ahoy.AhoySettingsActivity
+import org.fossify.messages.ahoy.AhoyStore
+import org.fossify.messages.ahoy.DraftStateChanged
 import org.fossify.messages.adapters.ConversationsAdapter
 import org.fossify.messages.adapters.SearchResultsAdapter
 import org.fossify.messages.databinding.ActivityMainBinding
@@ -100,10 +102,7 @@ class MainActivity : SimpleActivity() {
         clearAllMessagesIfNeeded {
             loadMessages()
         }
-
-        if (checkAppSideloading()) {
-            return
-        }
+        // Ahoy: no checkAppSideloading(), it flags any build not published by Fossify as fake
     }
 
     override fun onResume() {
@@ -179,6 +178,11 @@ class MainActivity : SimpleActivity() {
             when (menuItem.itemId) {
                 R.id.show_recycle_bin -> launchRecycleBin()
                 R.id.show_archived -> launchArchivedConversations()
+                R.id.ahoy_show_filtered -> startActivity(
+                    Intent(this, ArchivedConversationsActivity::class.java)
+                        .putExtra(ArchivedConversationsActivity.FILTERED_MODE, true)
+                )
+                R.id.ahoy_settings -> startActivity(Intent(this, AhoySettingsActivity::class.java))
                 R.id.settings -> launchSettings()
                 R.id.about -> launchAbout()
                 else -> return@setOnMenuItemClickListener false
@@ -400,9 +404,12 @@ class MainActivity : SimpleActivity() {
     }
 
     private fun setupConversations(
-        conversations: ArrayList<Conversation>,
+        allConversations: ArrayList<Conversation>,
         cached: Boolean = false,
     ) {
+        // Ahoy: spam and advertising live on the Filtered screen instead
+        val filtered = AhoyStore.get(this).filteredThreads()
+        val conversations = ArrayList(allConversations.filterNot { it.threadId in filtered })
         val sortedConversations = conversations
             .sortedWith(
                 compareByDescending<Conversation> {
@@ -675,6 +682,11 @@ class MainActivity : SimpleActivity() {
     @Subscribe(threadMode = ThreadMode.MAIN)
     fun refreshConversations(@Suppress("unused") event: Events.RefreshConversations) {
         initMessenger()
+    }
+
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    fun ahoyDraftStateChanged(@Suppress("unused") event: DraftStateChanged) {
+        getOrCreateConversationsAdapter().updateDrafts()
     }
 
     private fun checkWhatsNewDialog() {

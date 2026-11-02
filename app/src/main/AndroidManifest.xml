@@ -29,12 +29,16 @@
 
     <uses-feature android:name="android.hardware.telephony" />
 
+    <!-- Ahoy: only used to reach your own sms-triage server -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
     <application
         android:name=".App"
         android:allowBackup="true"
         android:appCategory="productivity"
         android:icon="@mipmap/ic_launcher"
-        android:label="@string/app_launcher_name"
+        android:label="@string/ahoy_app_name"
         android:roundIcon="@mipmap/ic_launcher"
         android:theme="@style/AppTheme">
 
@@ -103,6 +107,13 @@
                 <data android:mimeType="*/*" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".ahoy.AhoySettingsActivity"
+            android:configChanges="orientation"
+            android:exported="false"
+            android:label="@string/ahoy_server_settings"
+            android:parentActivityName=".activities.MainActivity" />
 
         <activity
             android:name=".activities.SettingsActivity"

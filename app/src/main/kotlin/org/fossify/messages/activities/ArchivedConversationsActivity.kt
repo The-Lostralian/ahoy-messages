@@ -14,6 +14,7 @@ import org.fossify.commons.extensions.viewBinding
 import org.fossify.commons.helpers.NavigationIcon
 import org.fossify.commons.helpers.ensureBackgroundThread
 import org.fossify.messages.R
+import org.fossify.messages.ahoy.AhoyStore
 import org.fossify.messages.adapters.ArchivedConversationsAdapter
 import org.fossify.messages.databinding.ActivityArchivedConversationsBinding
 import org.fossify.messages.extensions.config
@@ -31,11 +32,15 @@ class ArchivedConversationsActivity : SimpleActivity() {
     private var bus: EventBus? = null
     private val binding by viewBinding(ActivityArchivedConversationsBinding::inflate)
 
+    // Ahoy: the same screen lists conversations filtered as spam/advertising
+    private val filteredMode by lazy { intent.getBooleanExtra(FILTERED_MODE, false) }
+
     @SuppressLint("InlinedApi")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(binding.root)
         setupOptionsMenu()
+        if (filteredMode) binding.archiveToolbar.title = getString(R.string.ahoy_filtered)
 
         setupEdgeToEdge(padBottomImeAndSystem = listOf(binding.conversationsList))
         setupMaterialScrollListener(
@@ -70,14 +75,20 @@ class ArchivedConversationsActivity : SimpleActivity() {
 
     private fun updateOptionsMenu(conversations: ArrayList<Conversation>) {
         binding.archiveToolbar.menu.apply {
-            findItem(R.id.empty_archive).isVisible = conversations.isNotEmpty()
+            findItem(R.id.empty_archive).isVisible = conversations.isNotEmpty() && !filteredMode
         }
     }
 
     private fun loadArchivedConversations() {
         ensureBackgroundThread {
             val conversations = try {
-                conversationsDB.getAllArchived().toMutableList() as ArrayList<Conversation>
+                if (filteredMode) {
+                    val filtered = AhoyStore.get(this).filteredThreads()
+                    (conversationsDB.getNonArchived() + conversationsDB.getAllArchived())
+                        .filter { it.threadId in filtered }.toMutableList() as ArrayList<Conversation>
+                } else {
+                    conversationsDB.getAllArchived().toMutableList() as ArrayList<Conversation>
+                }
             } catch (e: Exception) {
                 ArrayList()
             }
@@ -116,7 +127,8 @@ class ArchivedConversationsActivity : SimpleActivity() {
                 activity = this,
                 recyclerView = binding.conversationsList,
                 onRefresh = { notifyDatasetChanged() },
-                itemClick = { handleConversationClick(it) }
+                itemClick = { handleConversationClick(it) },
+                filteredMode = filteredMode
             )
 
             binding.conversationsList.adapter = currAdapter
@@ -148,7 +160,8 @@ class ArchivedConversationsActivity : SimpleActivity() {
         binding.conversationsFastscroller.beGoneIf(show)
         binding.noConversationsPlaceholder.beVisibleIf(show)
         binding.noConversationsPlaceholder.setTextColor(getProperTextColor())
-        binding.noConversationsPlaceholder.text = getString(R.string.no_archived_conversations)
+        binding.noConversationsPlaceholder.text =
+            getString(if (filteredMode) R.string.ahoy_no_filtered else R.string.no_archived_conversations)
     }
 
     @SuppressLint("NotifyDataSetChanged")
@@ -163,6 +176,10 @@ class ArchivedConversationsActivity : SimpleActivity() {
             putExtra(THREAD_TITLE, conversation.title)
             startActivity(this)
         }
+    }
+
+    companion object {
+        const val FILTERED_MODE = "ahoy_filtered_mode"
     }
 
     @Subscribe(threadMode = ThreadMode.MAIN)

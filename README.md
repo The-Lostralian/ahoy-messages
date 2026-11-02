@@ -58,7 +58,9 @@ sounds per topic, a desk display that keeps quotes on screen, Home Assistant aut
 - **Docker** with Docker Compose.
 - **[Ollama](https://ollama.com)**, ideally with an NVIDIA GPU. It's developed on an **NVIDIA T1000 (4 GB)**,
   which fits the model it uses, **`qwen3:4b`**, with thinking switched off and a 4096-token context. Other
-  small models can work too; set `OLLAMA_MODEL`. CPU-only works, but expect slow drafts.
+  small models can work too; set `OLLAMA_MODEL`. CPU-only works, but expect slow drafts. On a 4 GB card,
+  see [fitting the model on a small GPU](server/README.md#fitting-the-model-on-a-small-gpu): out of the box,
+  Ollama may run part of the model on the CPU, which roughly halves the speed.
 - **[ntfy](https://ntfy.sh)** (self-hosted or ntfy.sh) for the alerts, with a token that can publish to the
   `ahoy-quote` and `ahoy-webmsg` topics.
 - **A reverse proxy with HTTPS**, so the phone can reach the server from anywhere. There's an Apache example

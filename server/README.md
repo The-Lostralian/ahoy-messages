@@ -139,6 +139,35 @@ ntfy access triage 'ahoy-*' write-only
 ntfy token add triage
 ```
 
+## Fitting the model on a small GPU
+
+On a 4 GB card such as the T1000, Ollama's own estimate of the memory it needs is cautious, and it may
+quietly put part of `qwen3:4b` on the CPU even when the whole model would fit. You'll see high CPU use
+and slow drafts. Check with:
+
+```bash
+docker exec ollama ollama ps
+```
+
+The PROCESSOR column should say `100% GPU`. If it says something like `14%/86% CPU/GPU`:
+
+1. Give Ollama flash attention and an 8-bit context cache, which about halve the memory a conversation
+   takes. In your Ollama container's environment:
+   ```yaml
+   - OLLAMA_FLASH_ATTENTION=1
+   - OLLAMA_KV_CACHE_TYPE=q8_0
+   ```
+2. If it still isn't `100% GPU` but `nvidia-smi` shows memory to spare, make a copy of the model that
+   always goes entirely on the GPU (it shares the original's files, so takes no extra disk space):
+   ```bash
+   docker exec ollama sh -c 'printf "FROM qwen3:4b\nPARAMETER num_gpu 99\n" > /tmp/Modelfile && ollama create qwen3:4b-gpu -f /tmp/Modelfile'
+   ```
+   and set `OLLAMA_MODEL=qwen3:4b-gpu` for both services.
+
+On the T1000, step 1 alone took deep reviews from about 14 seconds per reply to about 7. If the model fails
+to load (an out-of-memory error in `docker logs ollama`), something else is using the card; `nvidia-smi`
+shows what.
+
 ## Settings
 
 All are environment variables; see `docker-compose.example.yml` and `.env.example`.

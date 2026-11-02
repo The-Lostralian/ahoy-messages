@@ -3,6 +3,7 @@
 #
 # Needs an Ollama container (or install) the services can reach, with the model pulled:
 #   docker exec ollama ollama pull qwen3:4b
+# On a 4 GB GPU, see "Fitting the model on a small GPU" in README.md.
 # and an ntfy server for the alerts. Both are left out here because most people already run them.
 
 services:

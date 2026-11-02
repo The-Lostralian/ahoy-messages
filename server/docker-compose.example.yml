@@ -27,6 +27,7 @@ services:
       - NTFY_TOKEN=${NTFY_TOKEN}
       - NTFY_QUOTE_TOPIC=ahoy-quote
       - NTFY_MESSAGE_TOPIC=ahoy-webmsg
+      - DEEP_REVIEW_HOURS=${DEEP_REVIEW_HOURS}   # e.g. 22-7: deep reviews only use the GPU overnight
     ports:
       - "127.0.0.1:8098:8080"   # only your reverse proxy should reach this
     volumes:

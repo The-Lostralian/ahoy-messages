@@ -19,7 +19,9 @@ runs a small local AI model to:
 - **Draft replies.** A suggested reply is written into the reply box, with a spinner while it's on its way.
   It is never sent for you: edit it, or clear it with one tap.
 - **Learn your style.** Send a whole conversation for review and the server keeps notes on that person and
-  examples of how you write, so later drafts sound like you. One tap forgets it again.
+  examples of how you write, so later drafts sound like you. When you edit a draft before sending it, the
+  server learns from what you changed. A *deep review* goes further: in the background it drafts each of
+  your old replies again and compares the draft with what you really sent. One tap forgets it all again.
 
 Your texts never go to a cloud AI service. The phone talks only to your server, and every request is
 encrypted with a key that only the phone and the server have, so it's safe to put the server behind a proxy
@@ -89,7 +91,7 @@ sounds per topic, a desk display that keeps quotes on screen, Home Assistant aut
    docker compose up -d --build
    ```
 7. Put it behind your reverse proxy at a hostname like `sms.example.com`, letting through only `POST` to
-   `/sms/incoming`, `/sms/draft`, `/sms/review` and `/sms/forget`.
+   `/sms/incoming`, `/sms/draft`, `/sms/review`, `/sms/forget` and `/sms/feedback`.
 
 `GET /health` on the container answers `ok`, for monitoring (for example an Uptime Kuma HTTP check).
 `server/sms_client.py` is a command-line client for testing the server before setting up the phone.
@@ -104,7 +106,8 @@ sounds per topic, a desk display that keeps quotes on screen, Home Assistant aut
    shared key, then tap **Save and test**. It should say *Connected*.
 4. Make it your default SMS app when you're ready. You can try it alongside another SMS app first.
 
-In a conversation, ⋮ has **Draft a reply**, **Send for style review**, **Forget review**, and
+In a conversation, ⋮ has **Draft a reply**, **Send for style review**, **Deep review (in the background)**,
+**Forget review**, and
 **Move to Filtered** / **Not spam**. The main menu has **Show filtered (spam and ads)**.
 
 ## Known limits
@@ -113,8 +116,9 @@ In a conversation, ⋮ has **Draft a reply**, **Send for style review**, **Forge
 - Picture messages (MMS) aren't sorted or drafted for, only SMS.
 - Drafts and reviews only work in one-to-one conversations.
 - The shared key is stored in the app's private storage without extra encryption.
-- The server keeps notes from reviewed conversations and your example texts on disk (`/state`). Incoming
-  texts and drafts are not stored, and message text is never logged.
+- The server keeps notes from reviewed conversations, your example texts, and drafts next to what you
+  sent instead, on disk (`/state`). Other incoming texts and drafts are not stored, and message text is
+  never logged.
 
 ## Building from source
 

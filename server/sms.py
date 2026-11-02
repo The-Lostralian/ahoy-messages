@@ -15,10 +15,13 @@ Endpoints (POST, encrypted JSON):
     /sms/draft      write a reply draft for a conversation
     /sms/review     learn context and writing style from a whole conversation
     /sms/forget     delete what was learned from one number's conversation
+    /sms/feedback   a suggested draft next to what the owner actually sent, to learn from
 GET /health         plain "ok", for Uptime Kuma
 
-Only reviewed conversations are stored (in /state/sms); incoming texts and the recent messages
-sent along for drafts are used and then forgotten. Message text is never logged.
+Stored in /state/sms: reviewed conversations (notes and the owner's texts), corrections (drafts next to
+what was really sent, with the few messages they answered), lessons.txt (what the owner keeps changing,
+editable), and conversations queued for a deep review until it's done. Incoming texts and the recent
+messages sent along for drafts are used and then forgotten. Message text is never logged.
 """
 
 import base64
@@ -49,7 +52,13 @@ MAX_BODY = 2_000_000           # a reviewed conversation can be long; anything b
 MAX_SKEW = 300                 # seconds a request's timestamp may differ from the server clock
 THREAD_MESSAGES = 20           # recent messages used for a draft
 EXAMPLES_KEPT = 400            # the owner's texts kept as style examples, newest first
-DRAFT_EXAMPLES = 15            # examples shown to the model per draft
+DRAFT_EXAMPLES = 25            # examples shown to the model per draft
+CORRECTIONS_KEPT = 2000        # draft vs what the owner actually sent, newest first
+DRAFT_CORRECTIONS = 6          # corrections shown to the model per draft, the most similar first
+LESSONS_EVERY = 10             # new corrections between updates of the lessons
+PROMPT_CHARS = 11000           # rough cap on a draft prompt, to stay inside the model's context
+REPLAY_CONTEXT = 8             # messages before each reply that a deep review drafts from
+DEEP_HOURS = env("DEEP_REVIEW_HOURS", "")  # e.g. 22-7: when deep reviews may use the GPU; empty = any time
 OWNER = env("OWNER_NAME", "Owner")  # the phone's owner, as the model sees them in conversations
 
 
@@ -183,6 +192,70 @@ class Store:
             self._write(os.path.join(self.root, "style.json"), style)
             return len(added), style
 
+    # Corrections: what a draft said next to what the owner actually sent, from the phone (drafts the
+    # owner edited or sent as they were) and from deep reviews (old replies drafted again)
+
+    def corrections(self):
+        return self._read(os.path.join(self.root, "corrections.json"), {"items": [], "since_lessons": 0})
+
+    def add_correction(self, number, context, draft, sent, source):
+        """context: the last few lines of the conversation before the reply. Returns the number of
+        corrections since the lessons were last updated."""
+        with self.lock:
+            data = self.corrections()
+            data["items"].insert(0, {"key": number_key(number), "context": context, "draft": draft, "sent": sent,
+                                     "source": source, "at": datetime.now().isoformat(timespec="seconds")})
+            del data["items"][CORRECTIONS_KEPT:]
+            data["since_lessons"] += 1
+            self._write(os.path.join(self.root, "corrections.json"), data)
+            return data["since_lessons"]
+
+    def lessons_done(self):
+        with self.lock:
+            data = self.corrections()
+            data["since_lessons"] = 0
+            self._write(os.path.join(self.root, "corrections.json"), data)
+
+    # The lessons are plain text, so the owner can read and edit them; updates build on what's there
+    def lessons(self):
+        try:
+            with open(os.path.join(self.root, "lessons.txt"), encoding="utf-8") as fh:
+                return fh.read().strip()
+        except FileNotFoundError:
+            return ""
+
+    def save_lessons(self, text):
+        with self.lock:
+            path = os.path.join(self.root, "lessons.txt")
+            fd, tmp = tempfile.mkstemp(dir=self.root)
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(text.strip() + "\n")
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, path)
+
+    # Deep review jobs: one file per number, holding the conversation and the replies still to do
+
+    def _job_path(self, number):
+        return os.path.join(self.root, "jobs", number_key(number) + ".json")
+
+    def save_job(self, number, job):
+        os.makedirs(os.path.join(self.root, "jobs"), mode=0o700, exist_ok=True)
+        with self.lock:
+            self._write(self._job_path(number), job)
+
+    def jobs(self):
+        folder = os.path.join(self.root, "jobs")
+        paths = sorted(os.listdir(folder)) if os.path.isdir(folder) else []
+        return [job for job in (self._read(os.path.join(folder, p), None) for p in paths) if job]
+
+    def drop_job(self, number):
+        with self.lock:
+            try:
+                os.remove(self._job_path(number))
+                return True
+            except FileNotFoundError:
+                return False
+
     def save_style_notes(self, notes):
         with self.lock:
             style = self.style()
@@ -200,7 +273,11 @@ class Store:
             before = len(style["examples"])
             style["examples"] = [e for e in style["examples"] if e.get("key") != key]
             self._write(os.path.join(self.root, "style.json"), style)
-            return existed, before - len(style["examples"])
+            data = self.corrections()
+            data["items"] = [c for c in data["items"] if c.get("key") != key]
+            self._write(os.path.join(self.root, "corrections.json"), data)
+        self.drop_job(number)
+        return existed, before - len(style["examples"])
 
 
 # ==================== SORTING ==================== #
@@ -371,9 +448,15 @@ REVIEW_SYSTEM = triage.load_prompt("review_system", f"""You help {OWNER}, who ru
 keep notes on the people they text. Plain sentences or bullet points inside the JSON field, no markdown headings.""")
 
 
-def ollama_text(system, prompt, field, temperature=0.3, max_tokens=300):
+class Interrupted(Exception):
+    """Background work stopped so a text could have the model."""
+
+
+def ollama_text(system, prompt, field, temperature=0.3, max_tokens=300, interrupt=None):
     """The model's answer as one JSON string field. Without a fixed answer shape, qwen3 tends to
-    think out loud in the reply even with thinking switched off; the schema makes it answer directly."""
+    think out loud in the reply even with thinking switched off; the schema makes it answer directly.
+    With interrupt (background work), the answer is streamed and abandoned as soon as interrupt()
+    is true; closing the connection makes Ollama stop generating, freeing the GPU."""
     payload = {
         "model": triage.OLLAMA_MODEL,
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
@@ -385,9 +468,25 @@ def ollama_text(system, prompt, field, temperature=0.3, max_tokens=300):
     }
     if triage.OLLAMA_THINK:
         payload["think"] = triage.OLLAMA_THINK.lower() == "true"
-    res = requests.post(f"{triage.OLLAMA_URL}/api/chat", json=payload, timeout=triage.OLLAMA_TIMEOUT)
-    res.raise_for_status()
-    text = re.sub(r"(?s)<think>.*?</think>", "", res.json()["message"]["content"])
+    if interrupt is None:
+        res = requests.post(f"{triage.OLLAMA_URL}/api/chat", json=payload, timeout=triage.OLLAMA_TIMEOUT)
+        res.raise_for_status()
+        content = res.json()["message"]["content"]
+    else:
+        if interrupt():
+            raise Interrupted()
+        payload["stream"] = True
+        parts = []
+        with requests.post(f"{triage.OLLAMA_URL}/api/chat", json=payload, timeout=triage.OLLAMA_TIMEOUT,
+                           stream=True) as res:
+            res.raise_for_status()
+            for line in res.iter_lines(chunk_size=64):
+                if interrupt():
+                    raise Interrupted()
+                if line:
+                    parts.append(json.loads(line).get("message", {}).get("content", ""))
+        content = "".join(parts)
+    text = re.sub(r"(?s)<think>.*?</think>", "", content)
     return str(json.loads(text)[field]).strip()
 
 
@@ -396,36 +495,104 @@ def tidy_draft(text):
     return text.strip().strip('"“”').strip()
 
 
-def pick_examples(store, number):
+def pick_examples(store, number, exclude=()):
     """This person's texts first (how the owner talks to them), then the newest from everyone else."""
     profile = store.profile(number) or {}
-    own = profile.get("examples", [])[-8:]
-    others = [e["text"] for e in store.style()["examples"] if e.get("key") != number_key(number)]
+    own = [t for t in profile.get("examples", []) if t not in exclude][-10:]
+    others = [e["text"] for e in store.style()["examples"]
+              if e.get("key") != number_key(number) and e["text"] not in exclude]
     return own + others[:DRAFT_EXAMPLES - len(own)]
 
 
-def write_draft(store, number, name, thread):
+def same_text(a, b):
+    squash = lambda t: re.sub(r"[^a-z0-9]+", " ", str(t).casefold()).strip()
+    return squash(a) == squash(b)
+
+
+def words(text):
+    return set(re.findall(r"[a-z']{3,}", str(text).casefold()))
+
+
+def pick_corrections(store, number, thread, exclude=()):
+    """Drafts the owner changed, most like the message being answered first, this person's first on
+    a tie. Drafts sent as they were teach nothing about what to change, so they're left out."""
+    last = next((m.get("body") for m in reversed(thread) if not m.get("from_me")), "")
+    target, key = words(last), number_key(number)
+    scored = []
+    for i, c in enumerate(store.corrections()["items"]):
+        if same_text(c["draft"], c["sent"]) or c["sent"] in exclude or not c.get("context"):
+            continue
+        overlap = len(target & words(c["context"][-1]))
+        scored.append((overlap + (1 if c.get("key") == key else 0), -i, c))
+    scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    return [c for _, _, c in scored[:DRAFT_CORRECTIONS]]
+
+
+def write_draft(store, number, name, thread, exclude=(), interrupt=None, dated=True):
+    """exclude: texts the model mustn't see as examples (a deep review's real answer)."""
     if not thread:
         raise BadRequest("thread is empty")
     profile = store.profile(number) or {}
     style = store.style()
     them = name or profile.get("name") or "Them"
-    parts = []
-    if style.get("notes"):
-        parts.append(f"How {OWNER} writes:\n{style['notes']}")
-    examples = pick_examples(store, number)
-    if examples:
-        parts.append(f"Some of {OWNER}'s real texts:\n" + "\n".join(f"- {clip(t, 300)}" for t in examples))
-    if profile.get("summary"):
-        parts.append(f"Notes about {them}:\n{profile['summary']}")
-    person = find_person(number, name)
-    if person and person.notes:
-        parts.append(f"{OWNER}'s own notes about {them}:\n" + "\n".join(person.notes))
-    parts.append(f"Today is {datetime.now():%A %-d %B %Y}.")
-    parts.append(f"Conversation with {them} (oldest first):\n{thread_lines(thread, them)}")
-    parts.append(f"Write {OWNER}'s reply to {them}'s last message. "
-                 + (STYLE_FROM_EXAMPLES if examples or style.get("notes") else STYLE_DEFAULT))
-    return tidy_draft(ollama_text(DRAFT_SYSTEM, "\n\n".join(parts), "reply", temperature=0.5, max_tokens=250))
+    examples = pick_examples(store, number, exclude)
+    corrections = pick_corrections(store, number, thread, exclude)
+    lessons = store.lessons()
+
+    def build():
+        parts = []
+        if style.get("notes"):
+            parts.append(f"How {OWNER} writes:\n{style['notes']}")
+        if lessons:
+            parts.append(f"What {OWNER} changes in drafts (follow these):\n{lessons}")
+        if examples:
+            parts.append(f"Some of {OWNER}'s real texts:\n" + "\n".join(f"- {clip(t, 200)}" for t in examples))
+        if corrections:
+            parts.append(f"Earlier drafts {OWNER} changed before sending:\n" + "\n".join(
+                f"- To \"{clip(c['context'][-1], 150)}\" the draft was \"{clip(c['draft'], 200)}\"; "
+                f"{OWNER} sent \"{clip(c['sent'], 200)}\"" for c in corrections))
+        if profile.get("summary"):
+            parts.append(f"Notes about {them}:\n{profile['summary']}")
+        person = find_person(number, name)
+        if person and person.notes:
+            parts.append(f"{OWNER}'s own notes about {them}:\n" + "\n".join(person.notes))
+        if dated:
+            parts.append(f"Today is {datetime.now():%A %-d %B %Y}.")
+        parts.append(f"Conversation with {them} (oldest first):\n{thread_lines(thread, them, chars=300)}")
+        parts.append(f"Write {OWNER}'s reply to {them}'s last message. "
+                     + (STYLE_FROM_EXAMPLES if examples or style.get("notes") else STYLE_DEFAULT))
+        return "\n\n".join(parts)
+
+    prompt = build()
+    while len(prompt) > PROMPT_CHARS and (len(examples) > 8 or corrections):
+        if len(examples) > 8:
+            examples.pop()
+        else:
+            corrections.pop()
+        prompt = build()
+    return tidy_draft(ollama_text(DRAFT_SYSTEM, prompt, "reply", temperature=0.5, max_tokens=250,
+                                  interrupt=interrupt))
+
+
+def update_lessons(store, interrupt=None):
+    """Asks the model what the owner keeps changing in drafts, building on the current lessons."""
+    changed = [c for c in store.corrections()["items"] if not same_text(c["draft"], c["sent"])][:30]
+    if len(changed) < 5:
+        return False
+    current = store.lessons()
+    pairs = "\n".join(f"- To \"{clip(c['context'][-1], 120)}\": draft \"{clip(c['draft'], 160)}\" / "
+                      f"{OWNER} sent \"{clip(c['sent'], 160)}\"" for c in changed)
+    lessons = ollama_text(REVIEW_SYSTEM, (
+        (f"The current lessons are:\n{current}\n\n" if current else "") +
+        f"Here are reply drafts and what {OWNER} actually sent instead, newest first:\n{pairs}\n\n"
+        f"Write at most 10 short bullet points (each starting with \"- \") on what {OWNER} consistently changes: "
+        "length, tone, greetings, words and phrases, punctuation, what to leave out or add. Keep current lessons "
+        "that still hold, fix any these drafts contradict, and leave out one-off facts about a particular job."
+    ), "lessons", max_tokens=350, interrupt=interrupt)
+    store.save_lessons(lessons)
+    store.lessons_done()
+    log.info("lessons updated from %d changed drafts", len(changed))
+    return True
 
 
 def review_conversation(store, number, name, messages):
@@ -463,6 +630,125 @@ def review_conversation(store, number, name, messages):
         ), "style", max_tokens=250)
         store.save_style_notes(notes)
     return {"summary": summary, "style_notes": notes, "examples_added": added}
+
+
+# ==================== DEEP REVIEW ==================== #
+
+def in_hours(spec, hour):
+    """'22-7' is 10 pm to 7 am, '9-17' is 9 am to 5 pm, empty is always."""
+    m = re.fullmatch(r"\s*(\d{1,2})\s*-\s*(\d{1,2})\s*", spec or "")
+    if not m:
+        return True
+    start, end = int(m.group(1)) % 24, int(m.group(2)) % 24
+    return start <= hour < end if start < end else hour >= start or hour < end
+
+
+def reply_starts(messages):
+    """Index of the first message of each run of the owner's messages that answers someone."""
+    return [i for i, m in enumerate(messages)
+            if m.get("from_me") and i > 0 and not messages[i - 1].get("from_me")]
+
+
+class Live:
+    """Counts requests from the phone in progress. Background work waits until the phone has been quiet
+    for a little while, since a new text is usually followed by a draft request."""
+
+    QUIET_SECONDS = 20
+
+    def __init__(self):
+        self.active = 0
+        self.last = 0.0
+        self.lock = threading.Lock()
+
+    def __enter__(self):
+        with self.lock:
+            self.active += 1
+            self.last = time.time()
+
+    def __exit__(self, *exc):
+        with self.lock:
+            self.active -= 1
+            self.last = time.time()
+
+    def busy(self):
+        return self.active > 0 or time.time() - self.last < self.QUIET_SECONDS
+
+
+class DeepReviewer(threading.Thread):
+    """Drafts each of the owner's old replies from the messages before it, as if it were new, and keeps
+    the draft next to what the owner really sent. One reply at a time, newest first, only in DEEP_HOURS,
+    giving way to the phone; progress is saved after each reply, so restarts lose nothing."""
+
+    def __init__(self, store, live):
+        super().__init__(daemon=True, name="deep-review")
+        self.store, self.live = store, live
+        self.wake = threading.Event()
+        self.lessons_due = False
+
+    def run(self):
+        while True:
+            try:
+                if self.live.busy():
+                    time.sleep(2)
+                elif self.lessons_due:
+                    update_lessons(self.store, interrupt=self.live.busy)
+                    self.lessons_due = False
+                elif not self.step():
+                    self.wake.wait(60)
+                    self.wake.clear()
+            except Interrupted:
+                log.info("deep review paused for a request from the phone")  # resumes once it's quiet
+            except Exception:
+                log.exception("deep review step failed; trying again in a minute")
+                time.sleep(60)
+
+    def step(self):
+        """Does one reply of the oldest queued job. False if there was nothing to do now."""
+        if not in_hours(DEEP_HOURS, datetime.now().hour):
+            return False
+        jobs = self.store.jobs()
+        if not jobs:
+            return False
+        job = jobs[0]
+        number, messages = job["number"], job["messages"]
+        if not job["todo"]:
+            self.store.drop_job(number)
+            return True
+        start = job["todo"][0]
+        end = start
+        while end < len(messages) and messages[end].get("from_me"):
+            end += 1
+        sent = "\n".join(str(m.get("body") or "").strip() for m in messages[start:end]).strip()
+        context = messages[max(0, start - REPLAY_CONTEXT):start]
+        if sent and context:
+            exclude = {str(m.get("body") or "").strip() for m in messages[start:end]} | {sent}
+            draft = write_draft(self.store, number, job.get("name", ""), context, exclude=exclude,
+                                interrupt=self.live.busy, dated=False)
+            lines = [str(m.get("body") or "") for m in context if not m.get("from_me")][-3:]
+            if self.store.add_correction(number, lines, draft, sent, "deep review") >= LESSONS_EVERY:
+                self.lessons_due = True
+        if not os.path.exists(self.store._job_path(number)):
+            return True  # forgotten meanwhile
+        job["todo"].pop(0)
+        job["done"] += 1
+        if job["todo"]:
+            self.store.save_job(number, job)
+            if job["done"] % 25 == 0:
+                log.info("deep review of %s: %d of %d replies", masked(number), job["done"], job["total"])
+        else:
+            self.store.drop_job(number)
+            self.lessons_due = True
+            log.info("deep review of %s finished: %d replies", masked(number), job["total"])
+        return True
+
+    def queue(self, number, name, messages):
+        todo = reply_starts(messages)[::-1]  # newest first: the way the owner writes now matters most
+        self.store.save_job(number, {"number": number, "name": name, "messages": messages,
+                                     "todo": todo, "done": 0, "total": len(todo)})
+        self.wake.set()
+        log.info("deep review of %s queued: %d replies%s", masked(number), len(todo),
+                 f", runs {DEEP_HOURS}" if DEEP_HOURS else "")
+        return len(todo)
 
 
 # ==================== HTTP ==================== #
@@ -507,11 +793,14 @@ class App:
         self.guard = ReplayGuard()
         self.store = Store(STATE_DIR)
         self.recent = Recent()
+        self.live = Live()
+        self.reviewer = DeepReviewer(self.store, self.live)
         self.routes = {
             "/sms/incoming": self.incoming,
             "/sms/draft": self.draft,
             "/sms/review": self.review,
             "/sms/forget": self.forget,
+            "/sms/feedback": self.feedback,
         }
 
     def incoming(self, req):
@@ -566,10 +855,27 @@ class App:
 
     def review(self, req):
         number = normalise_number(required(req, "number"))
-        result = review_conversation(self.store, number, str(req.get("name") or "").strip(),
-                                     messages_of(req, "messages"))
+        name = str(req.get("name") or "").strip()
+        messages = messages_of(req, "messages")
+        result = review_conversation(self.store, number, name, messages)
         log.info("reviewed conversation with %s, %d new examples", masked(number), result["examples_added"])
+        if req.get("deep"):
+            result["deep_queued"] = self.reviewer.queue(number, name, messages)
+            result["deep_hours"] = DEEP_HOURS
         return result
+
+    def feedback(self, req):
+        """A draft the phone suggested, and what the owner actually sent."""
+        number = normalise_number(required(req, "number"))
+        draft, sent = required(req, "draft").strip(), required(req, "sent").strip()
+        context = [str(m.get("body") or "") for m in messages_of(req, "context") if not m.get("from_me")][-3:]
+        if not draft or not sent or not context:
+            raise BadRequest("draft, sent and context are needed")
+        same = same_text(draft, sent)
+        if self.store.add_correction(number, context, draft, sent, "phone") >= LESSONS_EVERY:
+            self.reviewer.lessons_due = True
+        log.info("feedback for %s: draft %s", masked(number), "sent as it was" if same else "changed")
+        return {"stored": True, "same": same}
 
     def forget(self, req):
         number = normalise_number(required(req, "number"))
@@ -618,7 +924,8 @@ def make_handler(app):
                 return self.send(401, b"")
             status = 200
             try:
-                result = route(req)
+                with app.live:
+                    result = route(req)
             except BadRequest as err:
                 status, result = 400, {"error": str(err)}
             except Exception as err:
@@ -633,9 +940,12 @@ def make_handler(app):
 def main():
     logging.basicConfig(level=env("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
     app = App()
+    app.reviewer.start()
     server = ThreadingHTTPServer(("0.0.0.0", PORT), make_handler(app))
     log.info("sms-triage listening on %d with model %s", PORT, triage.OLLAMA_MODEL)
     log.info("Prompts from %s: %s", triage.PROMPTS_DIR, ", ".join(triage.PROMPTS_FROM_FILES) or "none, using built-in")
+    queued = sum(len(j["todo"]) for j in app.store.jobs())
+    log.info("deep reviews run %s; %d replies queued", f"from {DEEP_HOURS}" if DEEP_HOURS else "any time", queued)
     if PEOPLE:
         log.info("people.txt: %d people, %d alert rules", len(PEOPLE), sum(len(p.rules) for p in PEOPLE.values()))
     server.serve_forever()

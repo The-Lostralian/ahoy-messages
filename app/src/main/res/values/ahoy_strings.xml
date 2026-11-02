@@ -15,8 +15,13 @@
     <string name="ahoy_review_confirm">Send this whole conversation to your server so drafts can learn from it? Only your server stores it.</string>
     <string name="ahoy_reviewing">Reviewing the conversation, this can take a minute…</string>
     <string name="ahoy_review_done">Reviewed. Notes: %s</string>
+    <string name="ahoy_deep_review">Deep review (in the background)</string>
+    <string name="ahoy_deep_review_confirm">Send this whole conversation to your server for a deep review? As well as the usual review, the server will draft each of your old replies again and compare it with what you really sent, to learn what it gets wrong. Only your server stores it, until the review is done.</string>
+    <string name="ahoy_deep_review_queued">Also drafting %d of your old replies again to learn from them.</string>
+    <string name="ahoy_deep_review_anytime">It runs in the background, pausing whenever a text comes in.</string>
+    <string name="ahoy_deep_review_hours">It runs in the background during the hours set on your server (%s), pausing whenever a text comes in.</string>
     <string name="ahoy_forget_review">Forget review</string>
-    <string name="ahoy_forget_confirm">Delete what your server learned from this conversation?</string>
+    <string name="ahoy_forget_confirm">Delete what your server learned from this conversation, including what it learned from your edits?</string>
     <string name="ahoy_forgotten">Forgotten</string>
     <string name="ahoy_failed">Failed: %s</string>
     <string name="ahoy_one_to_one_only">Only works in one-to-one conversations</string>

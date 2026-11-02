@@ -3,6 +3,7 @@ package org.fossify.messages.ahoy
 import android.content.Context
 import android.content.SharedPreferences
 import androidx.core.content.edit
+import org.json.JSONObject
 
 /**
  * Ahoy's own settings and state, kept apart from Fossify's config so upstream updates merge cleanly.
@@ -44,6 +45,24 @@ class AhoyStore private constructor(context: Context) {
         if (text == null) remove("$SUGGESTED$threadId") else putString("$SUGGESTED$threadId", text)
     }
 
+    /**
+     * The last draft written for a thread, with the messages it answered, kept until the next message
+     * is sent there (even if the suggestion was cleared), so the server can learn from what was sent.
+     */
+    fun setFeedbackDraft(threadId: Long, draft: String, context: String) = prefs.edit {
+        putString("$FEEDBACK$threadId", JSONObject().put("draft", draft).put("context", context)
+            .put("at", System.currentTimeMillis()).toString())
+    }
+
+    /** Returns and forgets the thread's last draft, if it was written in the last [maxAgeMs]. */
+    @Synchronized
+    fun takeFeedbackDraft(threadId: Long, maxAgeMs: Long): JSONObject? {
+        val saved = prefs.getString("$FEEDBACK$threadId", null) ?: return null
+        prefs.edit { remove("$FEEDBACK$threadId") }
+        val json = runCatching { JSONObject(saved) }.getOrNull() ?: return null
+        return json.takeIf { System.currentTimeMillis() - it.optLong("at") < maxAgeMs }
+    }
+
     private fun longSet(name: String): Set<Long> =
         prefs.getStringSet(name, emptySet()).orEmpty().mapNotNull { it.toLongOrNull() }.toSet()
 
@@ -62,6 +81,7 @@ class AhoyStore private constructor(context: Context) {
         private const val FILTERED = "filtered_threads"
         private const val PENDING = "pending_drafts"
         private const val SUGGESTED = "suggested_draft_"
+        private const val FEEDBACK = "feedback_draft_"
 
         @Volatile
         private var instance: AhoyStore? = null

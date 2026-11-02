@@ -22,12 +22,15 @@ import org.fossify.messages.extensions.getThreadParticipants
 import org.fossify.messages.extensions.saveSmsDraft
 import org.fossify.messages.helpers.refreshConversations
 import org.greenrobot.eventbus.EventBus
+import org.json.JSONArray
+import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
 /** What the phone does with sms-triage: sort incoming texts, fetch drafts, send conversations for review. */
 object AhoyTriage {
     private const val TAG = "AhoyTriage"
     private const val THREAD_LINES = 20
+    private const val FEEDBACK_MAX_AGE_MS = 12 * 60 * 60 * 1000L  // a reply much later is probably about something else
 
     /**
      * Sorts one incoming text. Returns true if it was filtered as spam/advertising, in which case the
@@ -73,14 +76,21 @@ object AhoyTriage {
     }
 
     /** Sends a whole conversation for the server to learn context and writing style from. */
-    fun review(context: Context, threadId: Long): String {
+    fun review(context: Context, threadId: Long, deep: Boolean = false): JSONObject {
         val (address, name) = threadContact(context, threadId)
         val messages = context.getMessages(threadId, includeScheduledMessages = false, limit = 2000)
             .sortedBy { it.date }
             .filter { it.body.isNotBlank() }
             .map { ThreadLine(fromMe = !it.isReceivedMessage(), body = it.body) }
-        val result = AhoyStore.get(context).client().review(address, name, messages)
-        return result.optString("summary")
+        return AhoyStore.get(context).client().review(address, name, messages, deep)
+    }
+
+    /** A message was sent in a one-to-one thread: if a draft was written for it, tell the server what was sent. */
+    fun onSent(context: Context, threadId: Long, text: String) {
+        val store = AhoyStore.get(context)
+        if (!store.isConfigured || text.isBlank()) return
+        val saved = store.takeFeedbackDraft(threadId, FEEDBACK_MAX_AGE_MS) ?: return
+        FeedbackWorker.enqueue(context, threadId, saved.optString("draft"), saved.optString("context"), text)
     }
 
     fun forget(context: Context, threadId: Long) {
@@ -150,6 +160,39 @@ class LateSortWorker(context: Context, params: WorkerParameters) : Worker(contex
     }
 }
 
+/** Tells the server what was sent in place of a suggested draft, so later drafts can learn from it. */
+class FeedbackWorker(context: Context, params: WorkerParameters) : Worker(context, params) {
+
+    override fun doWork(): Result {
+        return try {
+            val threadId = inputData.getLong(THREAD_ID, 0L)
+            val (address, name) = AhoyTriage.threadContact(applicationContext, threadId)
+            AhoyStore.get(applicationContext).client().feedback(address, name, JSONArray(inputData.getString(CONTEXT)),
+                inputData.getString(DRAFT).orEmpty(), inputData.getString(SENT).orEmpty())
+            Result.success()
+        } catch (e: Exception) {
+            Log.w("FeedbackWorker", "feedback failed (attempt ${runAttemptCount + 1}): $e")
+            if (runAttemptCount < 5 && e is java.io.IOException && e !is AhoyClient.Refused) Result.retry() else Result.failure()
+        }
+    }
+
+    companion object {
+        private const val THREAD_ID = "thread_id"
+        private const val DRAFT = "draft"
+        private const val CONTEXT = "context"
+        private const val SENT = "sent"
+
+        fun enqueue(context: Context, threadId: Long, draft: String, threadContext: String, sent: String) {
+            val request = OneTimeWorkRequestBuilder<FeedbackWorker>()
+                .setInputData(workDataOf(THREAD_ID to threadId, DRAFT to draft, CONTEXT to threadContext, SENT to sent))
+                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 1, TimeUnit.MINUTES)
+                .build()
+            WorkManager.getInstance(context).enqueue(request)
+        }
+    }
+}
+
 /** Posted when a thread's draft starts or finishes, so an open thread can update its spinner. */
 data class DraftStateChanged(val threadId: Long)
 
@@ -160,12 +203,14 @@ class DraftWorker(context: Context, params: WorkerParameters) : Worker(context, 
         val store = AhoyStore.get(applicationContext)
         return try {
             val (address, name) = AhoyTriage.threadContact(applicationContext, threadId)
-            val draft = store.client().draft(address, name, AhoyTriage.recentThread(applicationContext, threadId))
+            val thread = AhoyTriage.recentThread(applicationContext, threadId)
+            val draft = store.client().draft(address, name, thread)
             // Never overwrite something the user has typed (an earlier suggestion is fine to replace)
             val existing = applicationContext.getSmsDraft(threadId)
             if (draft.isNotBlank() && (existing.isEmpty() || existing == store.suggestedDraft(threadId))) {
                 applicationContext.saveSmsDraft(draft, threadId)
                 store.setSuggestedDraft(threadId, draft)
+                store.setFeedbackDraft(threadId, draft, ThreadLine.toJson(thread.takeLast(6)).toString())
             }
             finish(store, threadId)
             Result.success()

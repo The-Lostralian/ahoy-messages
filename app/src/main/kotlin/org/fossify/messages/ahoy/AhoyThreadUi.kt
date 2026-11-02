@@ -79,6 +79,7 @@ class AhoyThreadUi(
         val filtered = store.isFiltered(threadId())
         menu.findItem(R.id.ahoy_draft_reply)?.isVisible = usable
         menu.findItem(R.id.ahoy_send_for_review)?.isVisible = usable
+        menu.findItem(R.id.ahoy_deep_review)?.isVisible = usable
         menu.findItem(R.id.ahoy_forget_review)?.isVisible = usable
         menu.findItem(R.id.ahoy_not_spam)?.isVisible = filtered
         menu.findItem(R.id.ahoy_move_to_filtered)?.isVisible = !filtered
@@ -93,20 +94,11 @@ class AhoyThreadUi(
             }
 
             R.id.ahoy_send_for_review -> ConfirmationDialog(activity, activity.getString(R.string.ahoy_review_confirm)) {
-                activity.toast(R.string.ahoy_reviewing, Toast.LENGTH_LONG)
-                ensureBackgroundThread {
-                    val result = runCatching { AhoyTriage.review(activity, id) }
-                    activity.runOnUiThread {
-                        result.onSuccess { summary ->
-                            ConfirmationDialog(
-                                activity = activity,
-                                message = activity.getString(R.string.ahoy_review_done, summary),
-                                positive = org.fossify.commons.R.string.ok,
-                                negative = 0
-                            ) {}
-                        }.onFailure { showFailure(it) }
-                    }
-                }
+                review(id, deep = false)
+            }
+
+            R.id.ahoy_deep_review -> ConfirmationDialog(activity, activity.getString(R.string.ahoy_deep_review_confirm)) {
+                review(id, deep = true)
             }
 
             R.id.ahoy_forget_review -> ConfirmationDialog(activity, activity.getString(R.string.ahoy_forget_confirm)) {
@@ -127,6 +119,30 @@ class AhoyThreadUi(
             else -> return false
         }
         return true
+    }
+
+    private fun review(id: Long, deep: Boolean) {
+        activity.toast(R.string.ahoy_reviewing, Toast.LENGTH_LONG)
+        ensureBackgroundThread {
+            val result = runCatching { AhoyTriage.review(activity, id, deep) }
+            activity.runOnUiThread {
+                result.onSuccess { json ->
+                    var message = activity.getString(R.string.ahoy_review_done, json.optString("summary"))
+                    if (deep) {
+                        val hours = json.optString("deep_hours")
+                        message += "\n\n" + activity.getString(R.string.ahoy_deep_review_queued, json.optInt("deep_queued")) +
+                            " " + if (hours.isBlank()) activity.getString(R.string.ahoy_deep_review_anytime)
+                            else activity.getString(R.string.ahoy_deep_review_hours, hours)
+                    }
+                    ConfirmationDialog(
+                        activity = activity,
+                        message = message,
+                        positive = org.fossify.commons.R.string.ok,
+                        negative = 0
+                    ) {}
+                }.onFailure { showFailure(it) }
+            }
+        }
     }
 
     private fun showFailure(error: Throwable) {

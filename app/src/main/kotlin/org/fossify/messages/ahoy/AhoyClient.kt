@@ -44,9 +44,17 @@ class AhoyClient(private val baseUrl: String, keyBase64: String) {
             .put("number", number).put("name", name).put("thread", ThreadLine.toJson(thread)), timeoutMs = 90_000)
             .optString("draft")
 
-    fun review(number: String, name: String, messages: List<ThreadLine>): JSONObject =
+    /** [deep]: also queue the conversation for the server to draft each old reply again and learn from it. */
+    fun review(number: String, name: String, messages: List<ThreadLine>, deep: Boolean = false): JSONObject =
         call("/sms/review", JSONObject()
-            .put("number", number).put("name", name).put("messages", ThreadLine.toJson(messages)), timeoutMs = 150_000)
+            .put("number", number).put("name", name).put("messages", ThreadLine.toJson(messages)).put("deep", deep),
+            timeoutMs = 150_000)
+
+    /** A draft the app suggested, the messages it answered, and what was actually sent. */
+    fun feedback(number: String, name: String, context: org.json.JSONArray, draft: String, sent: String): JSONObject =
+        call("/sms/feedback", JSONObject()
+            .put("number", number).put("name", name).put("context", context).put("draft", draft).put("sent", sent),
+            timeoutMs = 20_000)
 
     fun forget(number: String): JSONObject =
         call("/sms/forget", JSONObject().put("number", number), timeoutMs = 20_000)

@@ -104,6 +104,7 @@ import org.fossify.commons.models.SimpleContact
 import org.fossify.messages.BuildConfig
 import org.fossify.messages.R
 import org.fossify.messages.ahoy.AhoyThreadUi
+import org.fossify.messages.ahoy.AhoyTriage
 import org.fossify.messages.ahoy.DraftStateChanged
 import org.fossify.messages.adapters.AttachmentsAdapter
 import org.fossify.messages.adapters.AutoCompleteTextViewAdapter
@@ -1689,6 +1690,7 @@ class ThreadActivity : SimpleActivity() {
         try {
             refreshedSinceSent = false
             sendMessageCompat(text, addresses, subscriptionId, attachments, messageToResend)
+            if (participants.size == 1) AhoyTriage.onSent(this, threadId, text)  // Ahoy: learn from edited drafts
             ensureBackgroundThread {
                 val existingMessages = messages.toSortedMessages()
                 val messages = getMessages(threadId, limit = maxOf(1, attachments.size))

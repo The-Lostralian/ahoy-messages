@@ -60,6 +60,11 @@
         android:title="@string/ahoy_send_for_review"
         app:showAsAction="never" />
     <item
+        android:id="@+id/ahoy_deep_review"
+        android:showAsAction="never"
+        android:title="@string/ahoy_deep_review"
+        app:showAsAction="never" />
+    <item
         android:id="@+id/ahoy_forget_review"
         android:showAsAction="never"
         android:title="@string/ahoy_forget_review"

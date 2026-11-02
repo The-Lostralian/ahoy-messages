@@ -70,6 +70,37 @@ For each text the phone receives:
 
 Drafts and style reviews are covered in the [main README](../README.md).
 
+## Learning from your edits
+
+Every time you send a reply in a conversation where the app suggested a draft, the phone tells the
+server what the draft said and what you actually sent (even if you cleared the draft and wrote your own).
+These **corrections** are kept in `/state/sms/corrections.json`. Each new draft is shown the few
+corrections most like the message it's answering, as "the draft was X; you sent Y".
+
+Every 10 new corrections, the model reads the latest ones and updates a short list of **lessons**: what
+you keep changing, such as length, greetings and favourite phrases. The list is in
+`/state/sms/lessons.txt`, goes into every draft, and is plain text you can read and edit; later updates
+build on what's there.
+
+```bash
+docker compose exec sms-triage cat /state/sms/lessons.txt
+```
+
+**Deep review** (⋮ → *Deep review (in the background)* in a conversation) does the normal style
+review, then queues the whole conversation. In the background, the server takes each of your replies,
+newest first, drafts it again from the 8 messages before it (without seeing your real answer), and stores
+the draft next to what you really sent, as a correction. A 700-message conversation is a few hundred
+replies, usually under half an hour of GPU time.
+
+- It gives way to the phone: if a text or draft request comes in, the step in progress is abandoned (the
+  model stops at once) and picked up again after 20 quiet seconds.
+- `DEEP_REVIEW_HOURS` limits it to certain hours, e.g. `22-7`. Outside them it just waits.
+- Progress is saved after every reply, so restarts lose nothing. The conversation is kept in
+  `/state/sms/jobs/` only until the review is done.
+- The log shows progress every 25 replies and when it finishes.
+
+*Forget review* also deletes that person's corrections and any deep review still queued.
+
 ## ntfy alerts
 
 Both services publish to the same two topics, so one subscription covers email and texts:
@@ -121,6 +152,7 @@ All are environment variables; see `docker-compose.example.yml` and `.env.exampl
 | `OLLAMA_MODEL` | both | `qwen2.5:3b` | The model; `qwen3:4b` is what it's tuned for |
 | `OLLAMA_THINK` | both | | `false` switches off "thinking" for models like qwen3 (recommended) |
 | `OLLAMA_NUM_CTX` | both | `2048` | Context size; use the same value for both services so Ollama doesn't reload the model |
+| `DEEP_REVIEW_HOURS` | sms | | When deep reviews may run, e.g. `22-7`; empty means any time |
 | `OLLAMA_KEEP_ALIVE` | both | `-1` | How long the model stays loaded; `-1` keeps it in GPU memory |
 | `NTFY_URL`, `NTFY_TOKEN` | both | `http://ntfy` | Where alerts go, and a token that can publish there |
 | `NTFY_QUOTE_TOPIC`, `NTFY_MESSAGE_TOPIC` | both | `ahoy-quote`, `ahoy-webmsg` | The two topics |

@@ -62,6 +62,9 @@ For each text the phone receives:
   message or business admin.
 - **From a stranger:** spam rules, then the model. Spam and marketing go to the app's *Filtered* list
   without a notification. Quotes and customer messages are alerted.
+- **Your own alert rules:** `people.txt` in your prompts folder can send particular texts from particular
+  people to ntfy at the priority you choose, for example "dinner's ready" from family at high priority. These
+  are checked first, without the model. See [`prompts.example/people.txt`](prompts.example/people.txt).
 - If the model can't be reached, texts from strangers are alerted anyway (better one too many than a
   missed customer), and the phone shows them as normal.
 
@@ -78,6 +81,7 @@ Both services publish to the same two topics, so one subscription covers email a
 | `ahoy-webmsg` | Business admin (tax, insurance, bank, licensing) | **1 (min)**: silent, but kept in the topic's history |
 | `ahoy-webmsg` | Anything from your contacts, or replies to your email, that isn't a quote or customer message | 3 (default) |
 | `ahoy-webmsg` | "Not sorted": the model couldn't be reached | 3, tagged ⚠️ |
+| `ahoy-webmsg` | Your own rules from `people.txt` (titled as you name them, with the text quoted) | as you set |
 
 Every alert has a title such as `Quote request: Sam Lee` or `Customer text: 0412…`, a one-line summary
 from the model, and a tag (`email` or `sms`) so you can tell where it came from. Message text from texts is

@@ -236,6 +236,52 @@ class SmsDecision:
     topic: str = ""
     priority: int = 3
     summary: str = ""
+    title: str = ""
+
+
+# ==================== PEOPLE ==================== #
+
+@dataclass
+class Person:
+    rules: list   # (priority, title, pattern)
+    notes: list   # lines for the model, when sorting their texts and drafting replies
+
+
+def person_key(who):
+    who = str(who or "").strip()
+    return who.casefold() if re.search(r"[A-Za-z]", who) else normalise_number(who)
+
+
+def load_people(text):
+    """people.txt: a [contact name or number] heading per person, then any number of
+        alert <priority 1-5> <title> | <pattern>
+    lines (a text from them matching the pattern, case-insensitive, is sent to ntfy as an alert)
+    and plain lines of notes about them."""
+    people, current = {}, None
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        heading = re.fullmatch(r"\[(.+)\]", line)
+        if heading:
+            current = people.setdefault(person_key(heading.group(1)), Person([], []))
+        elif current is None:
+            log.warning("people.txt: %r is not under a [name] heading, ignored", line[:40])
+        elif alert := re.fullmatch(r"(?i)alert\s+([1-5])\s+(.+?)\s*\|\s*(.+)", line):
+            try:
+                current.rules.append((int(alert.group(1)), alert.group(2), re.compile(alert.group(3), re.I | re.S)))
+            except re.error as err:
+                log.warning("people.txt: bad pattern for %r: %s", alert.group(2), err)
+        else:
+            current.notes.append(line)
+    return people
+
+
+PEOPLE = load_people(triage.load_prompt("people", ""))
+
+
+def find_person(number, name):
+    return PEOPLE.get(normalise_number(number)) or (PEOPLE.get(person_key(name)) if name else None)
 
 
 def clip(text, limit):
@@ -255,6 +301,13 @@ def decide_sms(number, name, is_contact, body, thread, model=None):
     if CODE_RE.search(body):
         return SmsDecision("code", "one-time code")
 
+    person = find_person(number, name if is_contact else "")
+    for priority, title, pattern in person.rules if person else []:
+        if pattern.search(body):
+            # The owner chose these texts, so the alert carries the text itself rather than a summary
+            return SmsDecision("alert", f"rule: {title}", topic=triage.NTFY_MESSAGE_TOPIC, priority=priority,
+                               summary=clip(body, 300), title=title)
+
     mail = triage.Mail(uid=0, account="sms", from_name=name or "", from_addr=number, to="", subject="",
                        body=clip(body, triage.BODY_CHARS))
     if not is_contact:
@@ -264,6 +317,8 @@ def decide_sms(number, name, is_contact, body, thread, model=None):
 
     who = f"{name} ({number})" if name else number
     text = f"Text message from {who}" + (", who is in the phone's contacts" if is_contact else ", not a contact")
+    if person and person.notes:
+        text += f"\n\n{OWNER}'s notes about them:\n" + "\n".join(person.notes)
     earlier = thread_lines([m for m in thread if m.get("body") != body][-4:], name or "Them", chars=300)
     if earlier:
         text += f"\n\nEarlier in this conversation:\n{earlier}"
@@ -286,7 +341,7 @@ def decide_sms(number, name, is_contact, body, thread, model=None):
 
 
 def notify_sms(number, name, decision):
-    title = f"{SMS_TITLES.get(decision.category, 'Text')}: {name or number}"
+    title = f"{decision.title or SMS_TITLES.get(decision.category, 'Text')}: {name or number}"
     lines = [f"From: {name} {number}" if name else f"From: {number}"]
     if decision.summary:
         lines += ["", decision.summary]
@@ -361,6 +416,9 @@ def write_draft(store, number, name, thread):
         parts.append(f"Some of {OWNER}'s real texts:\n" + "\n".join(f"- {clip(t, 300)}" for t in examples))
     if profile.get("summary"):
         parts.append(f"Notes about {them}:\n{profile['summary']}")
+    person = find_person(number, name)
+    if person and person.notes:
+        parts.append(f"{OWNER}'s own notes about {them}:\n" + "\n".join(person.notes))
     parts.append(f"Today is {datetime.now():%A %-d %B %Y}.")
     parts.append(f"Conversation with {them} (oldest first):\n{thread_lines(thread, them)}")
     parts.append(f"Write {OWNER}'s reply to {them}'s last message. "
@@ -438,6 +496,7 @@ class App:
         name = str(req.get("name") or "").strip()
         is_contact = bool(req.get("is_contact"))
         body = required(req, "body")
+        started = time.time()
         decision = decide_sms(number, name, is_contact, body, messages_of(req, "thread"))
         alerted = False
         if decision.topic:
@@ -446,8 +505,8 @@ class App:
                 alerted = True
             except Exception as err:
                 log.error("ntfy failed: %s", err)
-        log.info("incoming from %s -> %s (%s)%s", masked(number), decision.category, decision.reason,
-                 ", filtered" if decision.filtered else "")
+        log.info("incoming from %s -> %s (%s)%s in %.1fs", masked(number), decision.category, decision.reason,
+                 ", filtered" if decision.filtered else "", time.time() - started)
         return {
             "category": decision.category,
             "filtered": decision.filtered,
@@ -532,6 +591,8 @@ def main():
     server = ThreadingHTTPServer(("0.0.0.0", PORT), make_handler(app))
     log.info("sms-triage listening on %d with model %s", PORT, triage.OLLAMA_MODEL)
     log.info("Prompts from %s: %s", triage.PROMPTS_DIR, ", ".join(triage.PROMPTS_FROM_FILES) or "none, using built-in")
+    if PEOPLE:
+        log.info("people.txt: %d people, %d alert rules", len(PEOPLE), sum(len(p.rules) for p in PEOPLE.values()))
     server.serve_forever()
 
 

@@ -14,8 +14,9 @@ Keep the folder private: it's where your business details and writing rules go.
 | `draft_system.txt` | How reply drafts are written: your voice, length, spelling, what never to make up |
 | `draft_style_default.txt` | Style to use before any conversations have been reviewed |
 | `review_system.txt` | How notes about a person are written during a style review |
+| `people.txt` | Alert rules and notes for particular people, e.g. send "dinner's ready" from family to ntfy at high priority. See the example |
 
 You don't need to ask for JSON or describe the answer format: the server holds the model to it.
 The server logs which files it loaded when it starts (`Prompts from /prompts: ...`).
 
-`draft_system.txt` here is an example.
+`draft_system.txt` and `people.txt` here are examples.

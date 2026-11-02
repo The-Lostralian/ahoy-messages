@@ -33,7 +33,8 @@ services:
       - sms_triage_state:/state
       - ./prompts:/prompts:ro   # optional: your own prompts (see prompts.example/)
 
-  # Optional: the same sorting for email, read over IMAP (for example through Proton Bridge).
+  # Optional: the same sorting for email, from any IMAP account (Gmail, Fastmail, your own mail
+  # server, or Proton Mail through Proton Mail Bridge). It only reads mail; it never sends any.
   # Contacts come from a CardDAV server such as Radicale. Delete this service if you only want texts.
   mail-triage:
     build:
@@ -44,7 +45,8 @@ services:
       - PYTHONUNBUFFERED=1
       - TZ=${TZ}
       - IMAP_HOST=${IMAP_HOST}
-      - IMAP_PORT=143
+      - IMAP_PORT=${IMAP_PORT}
+      - IMAP_TLS=${IMAP_TLS}
       - IMAP_ACCOUNTS=main
       - IMAP_MAIN_USER=${IMAP_MAIN_USER}
       - IMAP_MAIN_PASS=${IMAP_MAIN_PASS}

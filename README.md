@@ -45,8 +45,11 @@ It works on de-Googled phones: no Google Play Services, no Play Integrity, no Fi
  ◄── suggested reply into the box ◄───
 ```
 
-The same server container can also sort email (`mail-triage`, reading IMAP, for example through Proton
-Bridge) with the same model and ntfy topics. That part is optional.
+The same server image can also sort your **email** (`mail-triage`): it watches any IMAP inbox and alerts
+you to quote requests and customer emails, using the same model. Both services post to the same two
+[ntfy](https://ntfy.sh) topics with priorities, so you can build your own alert setups on top: different
+sounds per topic, a desk display that keeps quotes on screen, Home Assistant automations. See the
+[server guide](server/README.md) for email setup, the alert topics and priorities, and every setting.
 
 ## What the server needs
 
@@ -58,8 +61,9 @@ Bridge) with the same model and ntfy topics. That part is optional.
   `ahoy-quote` and `ahoy-webmsg` topics.
 - **A reverse proxy with HTTPS**, so the phone can reach the server from anywhere. There's an Apache example
   in `server/apache-sms.example.conf`.
-- For email sorting only: an IMAP server (Proton Bridge works) and optionally a CardDAV address book such as
-  Radicale, so mail from your contacts always comes through.
+- For email sorting only: any IMAP email account (Gmail, Fastmail, your own server; Proton Mail through
+  Proton Mail Bridge), and optionally a CardDAV address book such as Radicale, so mail from your contacts
+  always comes through.
 
 ## Setting up the server
 

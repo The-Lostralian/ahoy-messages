@@ -1,5 +1,5 @@
 """
-mail-triage: watches the business inboxes through Proton Bridge and pushes the emails that
+mail-triage: watches the business inboxes over IMAP (e.g. through Proton Bridge) and pushes the emails that
 matter (quote requests, customer messages, real business admin) to ntfy.
 
 Order of decisions for each new email:
@@ -44,6 +44,8 @@ def env_list(name, default=""):
 
 IMAP_HOST = env("IMAP_HOST", "protonmail-bridge")
 IMAP_PORT = int(env("IMAP_PORT", "143"))
+# "" plain (Proton Bridge on a private Docker network), "ssl" (usually port 993) or "starttls" (port 143)
+IMAP_TLS = env("IMAP_TLS", "").lower()
 ACCOUNTS = env_list("IMAP_ACCOUNTS", "main")
 POLL_SECONDS = int(env("POLL_SECONDS", "60"))
 BATCH_LIMIT = int(env("BATCH_LIMIT", "20"))
@@ -466,7 +468,12 @@ def account_login(name):
     password = env(f"IMAP_{name.upper()}_PASS")
     if not user or not password:
         raise RuntimeError(f"IMAP_{name.upper()}_USER / IMAP_{name.upper()}_PASS not set")
-    imap = imaplib.IMAP4(IMAP_HOST, IMAP_PORT, timeout=60)
+    if IMAP_TLS == "ssl":
+        imap = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT, timeout=60)
+    else:
+        imap = imaplib.IMAP4(IMAP_HOST, IMAP_PORT, timeout=60)
+        if IMAP_TLS == "starttls":
+            imap.starttls()
     imap.login(user, password)
     return imap
 

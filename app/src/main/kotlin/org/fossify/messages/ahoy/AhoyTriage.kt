@@ -2,6 +2,7 @@ package org.fossify.messages.ahoy
 
 import android.content.Context
 import android.util.Log
+import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
@@ -21,6 +22,7 @@ import org.fossify.messages.extensions.getThreadParticipants
 import org.fossify.messages.extensions.saveSmsDraft
 import org.fossify.messages.helpers.refreshConversations
 import org.greenrobot.eventbus.EventBus
+import java.util.concurrent.TimeUnit
 
 /** What the phone does with sms-triage: sort incoming texts, fetch drafts, send conversations for review. */
 object AhoyTriage {
@@ -30,24 +32,32 @@ object AhoyTriage {
     /**
      * Sorts one incoming text. Returns true if it was filtered as spam/advertising, in which case the
      * caller skips the notification. Anything going wrong (no network, server down, no key) lets the
-     * text through as normal: a missed filter is better than a missed customer.
+     * text through as normal: a missed filter is better than a missed customer. It is then sorted again
+     * in the background once the server can be reached, which also asks for its draft.
      */
-    fun onIncoming(context: Context, threadId: Long, address: String, body: String): Boolean {
+    fun onIncoming(context: Context, threadId: Long, address: String, body: String, sentAt: Long): Boolean {
         val store = AhoyStore.get(context)
         if (!store.isConfigured) return false
         return try {
-            val (name, isContact) = sender(context, address)
-            val result = store.client().incoming(address, if (isContact) name else "", isContact, body,
-                recentThread(context, threadId))
-            val filtered = result.optBoolean("filtered")
-            store.setFiltered(threadId, filtered)
-            Log.i(TAG, "thread $threadId: ${result.optString("category")}${if (filtered) ", filtered" else ""}")
-            if (!filtered && result.optBoolean("draft")) requestDraft(context, threadId)
-            filtered
+            sort(context, threadId, address, body, sentAt, late = false)
         } catch (e: Exception) {
-            Log.w(TAG, "sorting failed, letting the text through: $e")
+            Log.w(TAG, "sorting failed, letting the text through and retrying later: $e")
+            if (e !is AhoyClient.Refused) LateSortWorker.enqueue(context, threadId, address, body, sentAt)
             false
         }
+    }
+
+    /** Asks the server about one text, files it, and asks for a draft if it's worth one. */
+    fun sort(context: Context, threadId: Long, address: String, body: String, sentAt: Long, late: Boolean): Boolean {
+        val store = AhoyStore.get(context)
+        val (name, isContact) = sender(context, address)
+        val result = store.client().incoming(address, if (isContact) name else "", isContact, body,
+            recentThread(context, threadId), sentAt, late)
+        val filtered = result.optBoolean("filtered")
+        store.setFiltered(threadId, filtered)
+        Log.i(TAG, "thread $threadId: ${result.optString("category")}${if (filtered) ", filtered" else ""}")
+        if (!filtered && result.optBoolean("draft")) requestDraft(context, threadId)
+        return filtered
     }
 
     /** Queues a draft for a conversation; the thread shows a spinner until it arrives. */
@@ -103,6 +113,40 @@ object AhoyTriage {
             context.getNameFromAddress(address, it)
         }
         return name to (inContacts || name != address)
+    }
+}
+
+/** Sorts a text whose first sorting failed (no network, or the server was slow), once it can. */
+class LateSortWorker(context: Context, params: WorkerParameters) : Worker(context, params) {
+
+    override fun doWork(): Result {
+        val data = inputData
+        return try {
+            val filtered = AhoyTriage.sort(applicationContext, data.getLong(THREAD_ID, 0L),
+                data.getString(ADDRESS).orEmpty(), data.getString(BODY).orEmpty(), data.getLong(SENT_AT, 0L), late = true)
+            if (filtered) refreshConversations()
+            Result.success()
+        } catch (e: Exception) {
+            Log.w("LateSortWorker", "late sorting failed (attempt ${runAttemptCount + 1}): $e")
+            if (runAttemptCount < 5 && e is java.io.IOException && e !is AhoyClient.Refused) Result.retry() else Result.failure()
+        }
+    }
+
+    companion object {
+        private const val THREAD_ID = "thread_id"
+        private const val ADDRESS = "address"
+        private const val BODY = "body"
+        private const val SENT_AT = "sent_at"
+
+        fun enqueue(context: Context, threadId: Long, address: String, body: String, sentAt: Long) {
+            val request = OneTimeWorkRequestBuilder<LateSortWorker>()
+                .setInputData(workDataOf(THREAD_ID to threadId, ADDRESS to address, BODY to body, SENT_AT to sentAt))
+                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+                .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+                .build()
+            WorkManager.getInstance(context).enqueueUniqueWork("sort-$sentAt", ExistingWorkPolicy.KEEP, request)
+        }
     }
 }
 

@@ -144,7 +144,7 @@ class SmsReceiver : BroadcastReceiver() {
 
         // Ahoy: sort the text on the home server; spam and advertising are filed under Filtered
         // without a notification (the text itself is kept)
-        val filtered = AhoyTriage.onIncoming(context, threadId, address, body)
+        val filtered = AhoyTriage.onIncoming(context, threadId, address, body, date)
 
         refreshMessages()
         refreshConversations()

@@ -340,9 +340,11 @@ def decide_sms(number, name, is_contact, body, thread, model=None):
     return SmsDecision(category, "contact" if is_contact else "model", topic=topic, priority=priority, summary=summary)
 
 
-def notify_sms(number, name, decision):
+def notify_sms(number, name, decision, sent_at=None):
     title = f"{decision.title or SMS_TITLES.get(decision.category, 'Text')}: {name or number}"
     lines = [f"From: {name} {number}" if name else f"From: {number}"]
+    if sent_at and time.time() - sent_at > 300:
+        lines.append(f"Sent {datetime.fromtimestamp(sent_at):%-I:%M %p} (the phone couldn't reach the server then)")
     if decision.summary:
         lines += ["", decision.summary]
     payload = {"topic": decision.topic, "title": title, "message": "\n".join(lines),
@@ -479,11 +481,32 @@ def messages_of(request, name):
     return value
 
 
+class Recent:
+    """Answers to the last hour's texts. When the phone gives up waiting for an answer it sends the text
+    again later; that retry gets the first answer, so the text isn't alerted twice."""
+
+    def __init__(self):
+        self.entries = {}
+        self.lock = threading.Lock()
+
+    def claim(self, key):
+        """(entry, first): first is True if this is the first time the text has been seen."""
+        with self.lock:
+            cutoff = time.time() - 3600
+            self.entries = {k: e for k, e in self.entries.items() if e["at"] > cutoff}
+            entry = self.entries.get(key)
+            if entry:
+                return entry, False
+            entry = self.entries[key] = {"at": time.time(), "done": threading.Event(), "result": None}
+            return entry, True
+
+
 class App:
     def __init__(self):
         self.aead = load_key()
         self.guard = ReplayGuard()
         self.store = Store(STATE_DIR)
+        self.recent = Recent()
         self.routes = {
             "/sms/incoming": self.incoming,
             "/sms/draft": self.draft,
@@ -493,20 +516,39 @@ class App:
 
     def incoming(self, req):
         number = normalise_number(required(req, "number"))
+        body = required(req, "body")
+        sent_at = req.get("sent_at")
+        sent_at = sent_at / 1000 if isinstance(sent_at, (int, float)) and sent_at > 0 else None  # phone sends ms
+        late = " (retried by the phone)" if req.get("late") else ""
+        if sent_at is None:
+            return self.sort_incoming(req, number, body, None, late)
+        key = hashlib.sha256(f"{number}|{sent_at}|{body}".encode()).hexdigest()
+        entry, first = self.recent.claim(key)
+        if not first:
+            entry["done"].wait(120)  # the first request may still be with the model
+            if entry["result"] is not None:
+                log.info("incoming from %s again%s, already sorted: %s", masked(number), late, entry["result"]["category"])
+                return entry["result"]
+        try:
+            entry["result"] = self.sort_incoming(req, number, body, sent_at, late)
+            return entry["result"]
+        finally:
+            entry["done"].set()
+
+    def sort_incoming(self, req, number, body, sent_at, late):
         name = str(req.get("name") or "").strip()
         is_contact = bool(req.get("is_contact"))
-        body = required(req, "body")
         started = time.time()
         decision = decide_sms(number, name, is_contact, body, messages_of(req, "thread"))
         alerted = False
         if decision.topic:
             try:
-                notify_sms(number, name, decision)
+                notify_sms(number, name, decision, sent_at)
                 alerted = True
             except Exception as err:
                 log.error("ntfy failed: %s", err)
-        log.info("incoming from %s -> %s (%s)%s in %.1fs", masked(number), decision.category, decision.reason,
-                 ", filtered" if decision.filtered else "", time.time() - started)
+        log.info("incoming from %s -> %s (%s)%s in %.1fs%s", masked(number), decision.category, decision.reason,
+                 ", filtered" if decision.filtered else "", time.time() - started, late)
         return {
             "category": decision.category,
             "filtered": decision.filtered,
@@ -550,7 +592,10 @@ def make_handler(app):
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                log.info("%s: the phone stopped waiting before the answer was ready", self.path)
 
         def do_GET(self):
             if self.path == "/health":

@@ -29,10 +29,15 @@ class AhoyClient(private val baseUrl: String, keyBase64: String) {
     private val key = SecretKeySpec(decodeKey(keyBase64), "AES")
     private val random = SecureRandom()
 
-    fun incoming(number: String, name: String, isContact: Boolean, body: String, thread: List<ThreadLine>): JSONObject =
+    /** [sentAt] identifies the text, so a retry of one the server already handled isn't alerted twice. */
+    fun incoming(
+        number: String, name: String, isContact: Boolean, body: String, thread: List<ThreadLine>, sentAt: Long,
+        late: Boolean = false,
+    ): JSONObject =
         call("/sms/incoming", JSONObject()
             .put("number", number).put("name", name).put("is_contact", isContact)
-            .put("body", body).put("thread", ThreadLine.toJson(thread)), timeoutMs = 6_000, connectMs = 4_000)
+            .put("body", body).put("thread", ThreadLine.toJson(thread)).put("sent_at", sentAt).put("late", late),
+            timeoutMs = if (late) 60_000 else 6_000, connectMs = if (late) 10_000 else 4_000)
 
     fun draft(number: String, name: String, thread: List<ThreadLine>): String =
         call("/sms/draft", JSONObject()

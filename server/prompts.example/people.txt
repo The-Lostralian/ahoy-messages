@@ -8,7 +8,7 @@
 [Dad]
 # Only says "dinner", or says ready / come up, and isn't a question
 alert 4 Dinner's ready | ^(?!.*\?)(\W*dinners?'?s?\W*$|.*\b(ready|come up)\b)
-alert 5 Help from Dad | \bhelp\b
+alert 5 Help | \bhelp\b
 He's family: his texts are personal, never business.
 Short greetings like "morning" just need a short greeting back.
 

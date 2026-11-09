@@ -1,0 +1,44 @@
+# Quick replies: the phone shows them as two buttons above the reply box, and one tap sends.
+#
+# The model's only job is to say which of these types the other person's last message is
+# (it sees each type's description). The phone then offers that type's replies, so nothing
+# the model writes ever reaches a button.
+#
+#   [type] description the model sorts by, with an example or two
+#   positive reply | negative reply        (leave out "| negative" for a single button)
+#
+# Edit freely and restart sms-triage. With qwen3:4b, 18 of 18 sample texts were
+# sorted right. Clear, different descriptions with examples are what keep it accurate; a
+# type with no reply line gets no buttons.
+
+[offer] they offer you something (food, a drink, a lift, a spare thing), e.g. "Mango??", "Want a cuppa?", "You eating with us?"
+Yes pls | No thanks
+
+[favour] they ask you to do something for them, e.g. "Can you grab milk?", "Can you call me?", "Are you free Thursday to hang a door?"
+Yes, no worries | Can't right now
+
+[invite] they invite you somewhere, e.g. "Want to come to the club tonight?"
+Sure | Not today
+
+[yes_no] any other question that yes or no answers, e.g. "Are you home?", "Is 5xl big enough?"
+Yep | Nope
+
+[how_are_you] they ask how you are, e.g. "You ok?"
+I'm ok, thanks
+
+[come_up] food is ready or they ask you to come, e.g. "Dinner's ready", "Come up"
+Coming
+
+[news] news, an update or a plan that needs no answer, e.g. "Running late", "Ordered, ready in 15", "I'll chat with dad"
+Ok | Ok, thanks
+
+[thanks] they thank you
+Thanks
+
+[morning] a morning greeting
+Morning
+
+[night] a goodnight
+Night
+
+[open] a question yes or no can't answer: what, when, where, which, how much, either/or, e.g. "What time are you coming?", "Pay now or when we get there?"

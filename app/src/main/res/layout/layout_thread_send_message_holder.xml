@@ -6,7 +6,8 @@
     android:layout_width="match_parent"
     android:layout_height="wrap_content">
 
-    <!-- Ahoy: shows while a reply draft is being written, then marks it as a suggestion with a clear button -->
+    <!-- Ahoy: shows while a reply draft is being written, then marks it as a suggestion with a clear button;
+         or shows one-tap quick replies (a positive and a negative) for the last text -->
     <RelativeLayout
         android:id="@+id/ahoy_draft_holder"
         android:layout_width="0dp"
@@ -72,6 +73,50 @@
             android:padding="@dimen/normal_margin"
             android:src="@drawable/ic_cross_vector"
             android:visibility="gone" />
+
+        <LinearLayout
+            android:id="@+id/ahoy_quick_row"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_below="@+id/ahoy_draft_label"
+            android:orientation="horizontal"
+            android:paddingStart="@dimen/medium_margin"
+            android:paddingEnd="@dimen/medium_margin"
+            android:paddingBottom="@dimen/medium_margin"
+            android:visibility="gone"
+            tools:visibility="visible">
+
+            <org.fossify.commons.views.MyTextView
+                android:id="@+id/ahoy_quick_positive"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:background="@drawable/section_holder_stroke"
+                android:clickable="true"
+                android:focusable="true"
+                android:foreground="?selectableItemBackground"
+                android:gravity="center"
+                android:minHeight="48dp"
+                android:padding="@dimen/medium_margin"
+                android:textSize="@dimen/bigger_text_size"
+                tools:text="Yes pls" />
+
+            <org.fossify.commons.views.MyTextView
+                android:id="@+id/ahoy_quick_negative"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="@dimen/medium_margin"
+                android:layout_weight="1"
+                android:background="@drawable/section_holder_stroke"
+                android:clickable="true"
+                android:focusable="true"
+                android:foreground="?selectableItemBackground"
+                android:gravity="center"
+                android:minHeight="48dp"
+                android:padding="@dimen/medium_margin"
+                android:textSize="@dimen/bigger_text_size"
+                tools:text="No thanks" />
+        </LinearLayout>
 
     </RelativeLayout>
 

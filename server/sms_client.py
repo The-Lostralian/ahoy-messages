@@ -9,6 +9,7 @@ back in the same envelope, with "<path>#<rid>" as associated data.
 Inside the container (SMS_KEY is already set there):
     python sms_client.py incoming --number 0412345678 --text "Hi, can you quote to hang a door?"
     python sms_client.py incoming --number 0412345678 --name "Jan" --contact --text "Running late"
+    python sms_client.py quick --number 0412345678 --name "Jan" --text "Want a cuppa?"
     python sms_client.py draft --number 0412345678 --name "Jan" --text "Are you free Thursday?"
     python sms_client.py review --number 0412345678 --name "Jan" --file conversation.json
     python sms_client.py forget --number 0412345678
@@ -45,12 +46,12 @@ def call(url, key, path, payload):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("command", choices=["incoming", "draft", "review", "forget"])
+    parser.add_argument("command", choices=["incoming", "quick", "draft", "review", "forget"])
     parser.add_argument("--url", default=os.environ.get("SMS_URL", "http://localhost:8080"))
     parser.add_argument("--number", required=True)
     parser.add_argument("--name", default="")
     parser.add_argument("--contact", action="store_true", help="sender is in the phone's contacts")
-    parser.add_argument("--text", help="the incoming message (incoming, draft)")
+    parser.add_argument("--text", help="the incoming message (incoming, quick, draft)")
     parser.add_argument("--file", help="conversation JSON (review, or the thread for draft)")
     args = parser.parse_args()
 
@@ -65,7 +66,7 @@ def main():
     payload = {"number": args.number, "name": args.name}
     if args.command == "incoming":
         payload.update(is_contact=args.contact, body=args.text or "", thread=thread)
-    elif args.command == "draft":
+    elif args.command in ("quick", "draft"):
         payload.update(thread=thread)
     elif args.command == "review":
         payload.update(messages=thread)

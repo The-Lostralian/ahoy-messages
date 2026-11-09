@@ -59,8 +59,22 @@ object AhoyTriage {
         val filtered = result.optBoolean("filtered")
         store.setFiltered(threadId, filtered)
         Log.i(TAG, "thread $threadId: ${result.optString("category")}${if (filtered) ", filtered" else ""}")
-        if (!filtered && result.optBoolean("draft")) requestDraft(context, threadId)
+        if (!filtered && result.optBoolean("draft")) requestQuick(context, threadId)
         return filtered
+    }
+
+    /** Asks for one-tap replies to the newest text; the thread shows a spinner until they arrive. */
+    fun requestQuick(context: Context, threadId: Long) {
+        val store = AhoyStore.get(context)
+        store.setQuickReplies(threadId, null)
+        store.setQuickPending(threadId, true)
+        EventBus.getDefault().post(DraftStateChanged(threadId))
+        val request = OneTimeWorkRequestBuilder<QuickWorker>()
+            .setInputData(workDataOf(DraftWorker.THREAD_ID to threadId))
+            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+            .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+            .build()
+        WorkManager.getInstance(context).enqueueUniqueWork("quick-$threadId", ExistingWorkPolicy.REPLACE, request)
     }
 
     /** Queues a draft for a conversation; the thread shows a spinner until it arrives. */
@@ -88,6 +102,10 @@ object AhoyTriage {
     /** A message was sent in a one-to-one thread: if a draft was written for it, tell the server what was sent. */
     fun onSent(context: Context, threadId: Long, text: String) {
         val store = AhoyStore.get(context)
+        if (store.quickReplies(threadId) != null) {
+            store.setQuickReplies(threadId, null)  // answered: the buttons go
+            EventBus.getDefault().post(DraftStateChanged(threadId))
+        }
         if (!store.isConfigured || text.isBlank()) return
         val saved = store.takeFeedbackDraft(threadId, FEEDBACK_MAX_AGE_MS) ?: return
         FeedbackWorker.enqueue(context, threadId, saved.optString("draft"), saved.optString("context"), text)
@@ -190,6 +208,29 @@ class FeedbackWorker(context: Context, params: WorkerParameters) : Worker(contex
                 .build()
             WorkManager.getInstance(context).enqueue(request)
         }
+    }
+}
+
+/** Fetches quick replies for a thread's newest text. No retries: a late answer to an old text is no use. */
+class QuickWorker(context: Context, params: WorkerParameters) : Worker(context, params) {
+
+    override fun doWork(): Result {
+        val threadId = inputData.getLong(DraftWorker.THREAD_ID, 0L)
+        val store = AhoyStore.get(applicationContext)
+        try {
+            val (address, name) = AhoyTriage.threadContact(applicationContext, threadId)
+            val thread = AhoyTriage.recentThread(applicationContext, threadId)
+            val last = thread.lastOrNull()
+            if (last != null && !last.fromMe) {
+                store.setQuickReplies(threadId, store.client().quick(address, name, thread), last.body)
+            }
+        } catch (e: Exception) {
+            Log.w("QuickWorker", "quick replies for thread $threadId failed: $e")
+        }
+        store.setQuickPending(threadId, false)
+        refreshConversations()
+        EventBus.getDefault().post(DraftStateChanged(threadId))
+        return Result.success()
     }
 }
 

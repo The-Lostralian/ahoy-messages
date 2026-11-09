@@ -3,6 +3,7 @@ package org.fossify.messages.ahoy
 import android.content.Context
 import android.content.SharedPreferences
 import androidx.core.content.edit
+import org.json.JSONArray
 import org.json.JSONObject
 
 /**
@@ -11,6 +12,7 @@ import org.json.JSONObject
  *  - conversations filtered as spam/advertising (hidden from the main list, shown under Filtered)
  *  - conversations with a draft on its way (the thread shows a spinner)
  *  - drafts the server wrote, so the thread can mark them as suggestions with a Clear button
+ *  - one-tap quick replies for the last text in a thread, and which text they answer
  */
 class AhoyStore private constructor(context: Context) {
 
@@ -43,6 +45,21 @@ class AhoyStore private constructor(context: Context) {
     fun suggestedDraft(threadId: Long): String? = prefs.getString("$SUGGESTED$threadId", null)
     fun setSuggestedDraft(threadId: Long, text: String?) = prefs.edit {
         if (text == null) remove("$SUGGESTED$threadId") else putString("$SUGGESTED$threadId", text)
+    }
+
+    fun isQuickPending(threadId: Long) = threadId in longSet(QUICK_PENDING)
+    fun setQuickPending(threadId: Long, pending: Boolean) = updateSet(QUICK_PENDING, threadId, pending)
+
+    /** Quick replies for a thread, and the text they answer: they're only shown while that's still the last message. */
+    fun quickReplies(threadId: Long): Pair<List<String>, String>? {
+        val json = prefs.getString("$QUICK$threadId", null)?.let { runCatching { JSONObject(it) }.getOrNull() } ?: return null
+        val replies = json.optJSONArray("replies") ?: return null
+        return (0 until replies.length()).map { replies.optString(it) } to json.optString("answers")
+    }
+
+    fun setQuickReplies(threadId: Long, replies: List<String>?, answers: String = "") = prefs.edit {
+        if (replies.isNullOrEmpty()) remove("$QUICK$threadId")
+        else putString("$QUICK$threadId", JSONObject().put("replies", JSONArray(replies)).put("answers", answers).toString())
     }
 
     /**
@@ -82,6 +99,8 @@ class AhoyStore private constructor(context: Context) {
         private const val PENDING = "pending_drafts"
         private const val SUGGESTED = "suggested_draft_"
         private const val FEEDBACK = "feedback_draft_"
+        private const val QUICK_PENDING = "pending_quick"
+        private const val QUICK = "quick_replies_"
 
         @Volatile
         private var instance: AhoyStore? = null

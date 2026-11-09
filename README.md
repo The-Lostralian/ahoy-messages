@@ -16,7 +16,10 @@ runs a small local AI model to:
   codes are never filtered.
 - **Flag work.** Quote requests and texts from customers are pushed to [ntfy](https://ntfy.sh), so they reach
   your other devices with a short summary.
-- **Draft replies.** A suggested reply is written into the reply box, with a spinner while it's on its way.
+- **Quick replies.** Most texts only need "Yep" or "No thanks": two buttons above the reply box offer a
+  positive and a negative reply to the newest text, and one tap sends. The server's model only sorts the
+  message (an offer, a favour, a yes/no question...); the replies come from a list you edit.
+- **Draft replies.** ⋮ → *Draft a reply* writes a full suggested reply into the reply box, with a spinner while it's on its way.
   It is never sent for you: edit it, or clear it with one tap.
 - **Learn your style.** Send a whole conversation for review and the server keeps notes on that person and
   examples of how you write, so later drafts sound like you. When you edit a draft before sending it, the
@@ -42,9 +45,10 @@ It works on de-Googled phones: no Google Play Services, no Play Integrity, no Fi
  SMS arrives ──► encrypted POST ──────► sms-triage ──► Ollama (qwen3:4b on the GPU)
                  (through your                │
                   reverse proxy)              ├──► ntfy: "Quote request (text)"
- ◄── filtered? draft coming? ◄────────────────┘
- Draft request ──────────────────────► writes a reply in your style
- ◄── suggested reply into the box ◄───
+ ◄── filtered? worth a reply? ◄───────────────┘
+ Quick request ──────────────────────► sorts the message: offer, favour, yes/no...
+ ◄── two one-tap reply buttons ◄──────
+ (⋮ Draft a reply ───────────────────► writes a full reply in your style)
 ```
 
 The same server image can also sort your **email** (`mail-triage`): it watches any IMAP inbox and alerts
@@ -93,7 +97,7 @@ sounds per topic, a desk display that keeps quotes on screen, Home Assistant aut
    docker compose up -d --build
    ```
 7. Put it behind your reverse proxy at a hostname like `sms.example.com`, letting through only `POST` to
-   `/sms/incoming`, `/sms/draft`, `/sms/review`, `/sms/forget` and `/sms/feedback`.
+   `/sms/incoming`, `/sms/quick`, `/sms/draft`, `/sms/review`, `/sms/forget` and `/sms/feedback`.
 
 `GET /health` on the container answers `ok`, for monitoring (for example an Uptime Kuma HTTP check).
 `server/sms_client.py` is a command-line client for testing the server before setting up the phone.

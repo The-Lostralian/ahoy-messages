@@ -58,8 +58,9 @@ would have done with your 30 newest emails.
 For each text the phone receives:
 
 - **One-time codes** are never filtered or alerted.
-- **From a contact:** the phone notifies you as usual. It's also sent to ntfy if it's a quote, a customer
-  message or business admin.
+- **From a contact:** the phone notifies you as usual, and the whole text goes to ntfy word for word, never
+  summarised: to `ahoy-quote` or `ahoy-webmsg` if it's a quote, a customer message or matches one of your
+  rules, otherwise to `ahoy-sms` (handy for a desk display). One-time codes never go.
 - **From a stranger:** spam rules, then the model. Spam and marketing go to the app's *Filtered* list
   without a notification. Quotes and customer messages are alerted.
 - **Your own alert rules:** `people.txt` in your prompts folder can send particular texts from particular
@@ -70,6 +71,20 @@ For each text the phone receives:
 
 Drafts and style reviews are covered in the [main README](../README.md).
 
+## Quick replies
+
+For each text worth answering, the phone asks `/sms/quick` and shows up to two buttons above the reply
+box, a positive and a negative reply (for example *Yes pls* / *No thanks*). One tap sends.
+
+The model doesn't write these. It only says what **type** the other person's last message is (an offer,
+a favour, a yes/no question, news, a greeting, an open question...), and each type has fixed replies in
+`quick_replies.txt` in your prompts folder. Sorting a message is something a small model does reliably
+(about 0.6 s with qwen3:4b), where writing replies from scratch made it copy the message back or make
+things up. Open questions ("what time?") get no buttons. Edit the types and replies to suit how you text;
+see [`prompts.example/quick_replies.txt`](prompts.example/quick_replies.txt).
+
+A full written draft is still there when you want one: ⋮ → *Draft a reply*.
+
 ## Learning from your edits
 
 Every time you send a reply in a conversation where the app suggested a draft, the phone tells the
@@ -77,10 +92,14 @@ server what the draft said and what you actually sent (even if you cleared the d
 These **corrections** are kept in `/state/sms/corrections.json`. Each new draft is shown the few
 corrections most like the message it's answering, as "the draft was X; you sent Y".
 
-Every 10 new corrections, the model reads the latest ones and updates a short list of **lessons**: what
-you keep changing, such as length, greetings and favourite phrases. The list is in
-`/state/sms/lessons.txt`, goes into every draft, and is plain text you can read and edit; later updates
-build on what's there.
+With `SMS_LEARN_LESSONS=true`, every 10 new corrections the model reads the latest ones and updates a
+short list of **lessons**: what you keep changing, such as length, greetings and favourite phrases. The
+list is in `/state/sms/lessons.txt`, goes into every draft, and is plain text you can read and edit. It's
+off by default: qwen3:4b wrote its own instructions back instead of lessons, and the same for the style
+notes from reviews, so neither goes into drafts unless this is on. Check both files before turning it on.
+
+Drafts only see your texts to the person you're replying to, and only that person's corrections: with
+everyone's texts as examples, the model copied what they said, not just how they were written.
 
 ```bash
 docker compose exec sms-triage cat /state/sms/lessons.txt
@@ -103,7 +122,7 @@ replies, usually under half an hour of GPU time.
 
 ## ntfy alerts
 
-Both services publish to the same two topics, so one subscription covers email and texts:
+Both services publish to the same topics, so one subscription covers email and texts:
 
 | Topic | What arrives | Priority |
 |---|---|---|
@@ -113,10 +132,12 @@ Both services publish to the same two topics, so one subscription covers email a
 | `ahoy-webmsg` | Anything from your contacts, or replies to your email, that isn't a quote or customer message | 3 (default) |
 | `ahoy-webmsg` | "Not sorted": the model couldn't be reached | 3, tagged ⚠️ |
 | `ahoy-webmsg` | Your own rules from `people.txt` (titled as you name them, with the text quoted) | as you set |
+| `ahoy-sms` | Every other text from a contact, word for word, titled with their name | 3 (default) |
 
 Every alert has a title such as `Quote request: Sam Lee` or `Customer text: 0412…`, a one-line summary
-from the model, and a tag (`email` or `sms`) so you can tell where it came from. Message text from texts is
-summarised, never copied in full. Rename the topics with `NTFY_QUOTE_TOPIC` and `NTFY_MESSAGE_TOPIC`.
+from the model, and a tag (`email` or `sms`) so you can tell where it came from. Texts from strangers are
+summarised; texts from contacts are copied in full. Rename the topics with `NTFY_QUOTE_TOPIC`,
+`NTFY_MESSAGE_TOPIC` and `NTFY_SMS_TOPIC` (empty `NTFY_SMS_TOPIC` turns the contact forwarding off).
 
 Because it's plain ntfy, you can build your own alert setups on top:
 

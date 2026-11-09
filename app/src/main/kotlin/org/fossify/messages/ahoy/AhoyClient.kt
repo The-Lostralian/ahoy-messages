@@ -44,6 +44,14 @@ class AhoyClient(private val baseUrl: String, keyBase64: String) {
             .put("number", number).put("name", name).put("thread", ThreadLine.toJson(thread)), timeoutMs = 90_000)
             .optString("draft")
 
+    /** Up to two one-tap replies to the last message, positive first; empty if none fit. */
+    fun quick(number: String, name: String, thread: List<ThreadLine>): List<String> {
+        val replies = call("/sms/quick", JSONObject()
+            .put("number", number).put("name", name).put("thread", ThreadLine.toJson(thread)), timeoutMs = 30_000)
+            .optJSONArray("replies") ?: return emptyList()
+        return (0 until replies.length()).map { replies.optString(it) }.filter { it.isNotBlank() }
+    }
+
     /** [deep]: also queue the conversation for the server to draft each old reply again and learn from it. */
     fun review(number: String, name: String, messages: List<ThreadLine>, deep: Boolean = false): JSONObject =
         call("/sms/review", JSONObject()

@@ -237,7 +237,8 @@ class ThreadActivity : SimpleActivity() {
 
     // Ahoy: draft bar and extra menu items
     private val ahoyUi by lazy {
-        AhoyThreadUi(this, binding.messageHolder, threadId = { threadId }, onMenuChanged = { refreshMenuItems() })
+        AhoyThreadUi(this, binding.messageHolder, threadId = { threadId }, onMenuChanged = { refreshMenuItems() },
+            lastReceived = { messages.maxByOrNull { it.date }?.takeIf { it.isReceivedMessage() }?.body })
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -630,6 +631,7 @@ class ThreadActivity : SimpleActivity() {
                             lastPosition - lastVisiblePosition == 1
                 updateMessages(latestThreadItems, if (shouldScrollToBottom) lastPosition else -1)
             }
+            ahoyUi.updateDraftBar()  // Ahoy: quick replies only show while the text they answer is the newest
         }
 
         SimpleContactsHelper(this).getAvailableContacts(false) { contacts ->

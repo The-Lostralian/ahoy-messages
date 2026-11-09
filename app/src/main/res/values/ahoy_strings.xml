@@ -8,6 +8,8 @@
     <string name="ahoy_suggested_draft">Suggested reply: edit it, or clear it</string>
     <string name="ahoy_clear_draft">Clear suggested reply</string>
     <string name="ahoy_draft_reply">Draft a reply</string>
+    <string name="ahoy_picking_quick">Picking quick replies…</string>
+    <string name="ahoy_quick_label">Quick reply: one tap sends</string>
     <string name="ahoy_draft_failed">Couldn\'t get a draft: %s</string>
 
     <!-- Review -->

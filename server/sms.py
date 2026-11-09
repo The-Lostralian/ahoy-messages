@@ -12,7 +12,8 @@ have. Requests carry a timestamp and a random id; stale or replayed requests are
 
 Endpoints (POST, encrypted JSON):
     /sms/incoming   sort one incoming text: filtered?, category, whether a draft is worth asking for
-    /sms/draft      write a reply draft for a conversation
+    /sms/quick      pick a positive and a negative one-tap reply for the last message
+    /sms/draft      write a full reply draft for a conversation (on request from the phone's menu)
     /sms/review     learn context and writing style from a whole conversation
     /sms/forget     delete what was learned from one number's conversation
     /sms/feedback   a suggested draft next to what the owner actually sent, to learn from
@@ -60,6 +61,9 @@ PROMPT_CHARS = 11000           # rough cap on a draft prompt, to stay inside the
 REPLAY_CONTEXT = 8             # messages before each reply that a deep review drafts from
 DEEP_HOURS = env("DEEP_REVIEW_HOURS", "")  # e.g. 22-7: when deep reviews may use the GPU; empty = any time
 OWNER = env("OWNER_NAME", "Owner")  # the phone's owner, as the model sees them in conversations
+SMS_TOPIC = env("NTFY_SMS_TOPIC", "ahoy-sms")  # every text from a contact, word for word; empty = off
+NTFY_MAX_CHARS = 3500          # ntfy turns messages over 4096 bytes into attachments
+LEARN_LESSONS = env("SMS_LEARN_LESSONS", "") == "true"  # off: qwen3:4b's lessons were the instructions echoed back
 
 
 # ==================== ENCRYPTION ==================== #
@@ -314,6 +318,7 @@ class SmsDecision:
     priority: int = 3
     summary: str = ""
     title: str = ""
+    full_text: bool = False   # the notification carries the whole text rather than the summary
 
 
 # ==================== PEOPLE ==================== #
@@ -417,13 +422,29 @@ def decide_sms(number, name, is_contact, body, thread, model=None):
     return SmsDecision(category, "contact" if is_contact else "model", topic=topic, priority=priority, summary=summary)
 
 
-def notify_sms(number, name, decision, sent_at=None):
-    title = f"{decision.title or SMS_TITLES.get(decision.category, 'Text')}: {name or number}"
-    lines = [f"From: {name} {number}" if name else f"From: {number}"]
+def forward_contact_text(decision, is_contact):
+    """Texts from contacts always reach ntfy (and so the desk Kindle) word for word: ones that alert
+    anyway carry the whole text instead of a summary, and the rest go to SMS_TOPIC. One-time codes never."""
+    if not is_contact or decision.category == "code" or decision.filtered or not SMS_TOPIC:
+        return decision
+    decision.full_text = True
+    if not decision.topic:
+        decision.topic, decision.priority = SMS_TOPIC, 3
+    return decision
+
+
+def notify_sms(number, name, decision, sent_at=None, body=""):
+    text = clip(body, NTFY_MAX_CHARS) if decision.full_text else decision.summary
+    if decision.full_text and decision.topic == SMS_TOPIC:
+        # A plain forward: the sender as the title and their text as the message, nothing else
+        title, lines = name or number, []
+    else:
+        title = f"{decision.title or SMS_TITLES.get(decision.category, 'Text')}: {name or number}"
+        lines = [f"From: {name} {number}" if name else f"From: {number}"]
     if sent_at and time.time() - sent_at > 300:
         lines.append(f"Sent {datetime.fromtimestamp(sent_at):%-I:%M %p} (the phone couldn't reach the server then)")
-    if decision.summary:
-        lines += ["", decision.summary]
+    if text:
+        lines += ([""] if lines else []) + [text]
     payload = {"topic": decision.topic, "title": title, "message": "\n".join(lines),
                "priority": decision.priority, "tags": ["sms"] + (["warning"] if decision.category == "unclassified" else [])}
     headers = {"Authorization": f"Bearer {triage.NTFY_TOKEN}"} if triage.NTFY_TOKEN else {}
@@ -454,13 +475,21 @@ class Interrupted(Exception):
 
 def ollama_text(system, prompt, field, temperature=0.3, max_tokens=300, interrupt=None):
     """The model's answer as one JSON string field. Without a fixed answer shape, qwen3 tends to
-    think out loud in the reply even with thinking switched off; the schema makes it answer directly.
+    think out loud in the reply even with thinking switched off; the schema makes it answer directly."""
+    schema = {"type": "object", "properties": {field: {"type": "string"}}, "required": [field]}
+    answer = ollama_json(system, prompt, schema, temperature, max_tokens, interrupt)
+    return str(answer[field]).strip()
+
+
+def ollama_json(system, prompt, schema, temperature=0.3, max_tokens=300, interrupt=None):
+    """The model's answer as a dict shaped by the JSON schema (Ollama enforces it while generating,
+    so an "enum" field can only ever be one of its values).
     With interrupt (background work), the answer is streamed and abandoned as soon as interrupt()
     is true; closing the connection makes Ollama stop generating, freeing the GPU."""
     payload = {
         "model": triage.OLLAMA_MODEL,
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
-        "format": {"type": "object", "properties": {field: {"type": "string"}}, "required": [field]},
+        "format": schema,
         "stream": False,
         "keep_alive": int(triage.OLLAMA_KEEP_ALIVE) if triage.OLLAMA_KEEP_ALIVE.lstrip("-").isdigit()
                       else triage.OLLAMA_KEEP_ALIVE,
@@ -487,7 +516,7 @@ def ollama_text(system, prompt, field, temperature=0.3, max_tokens=300, interrup
                     parts.append(json.loads(line).get("message", {}).get("content", ""))
         content = "".join(parts)
     text = re.sub(r"(?s)<think>.*?</think>", "", content)
-    return str(json.loads(text)[field]).strip()
+    return json.loads(text)
 
 
 def tidy_draft(text):
@@ -498,10 +527,9 @@ def tidy_draft(text):
 def pick_examples(store, number, exclude=()):
     """This person's texts first (how the owner talks to them), then the newest from everyone else."""
     profile = store.profile(number) or {}
-    own = [t for t in profile.get("examples", []) if t not in exclude][-10:]
-    others = [e["text"] for e in store.style()["examples"]
-              if e.get("key") != number_key(number) and e["text"] not in exclude]
-    return own + others[:DRAFT_EXAMPLES - len(own)]
+    # Texts to other people are left out: the model copied what they said (a shopping order sent to one
+    # person turned up in replies to another), not just how they were written
+    return [t for t in profile.get("examples", []) if t not in exclude][-DRAFT_EXAMPLES:]
 
 
 def same_text(a, b):
@@ -520,7 +548,7 @@ def pick_corrections(store, number, thread, exclude=()):
     target, key = words(last), number_key(number)
     scored = []
     for i, c in enumerate(store.corrections()["items"]):
-        if same_text(c["draft"], c["sent"]) or c["sent"] in exclude or not c.get("context"):
+        if same_text(c["draft"], c["sent"]) or c["sent"] in exclude or not c.get("context") or c.get("key") != key:
             continue
         overlap = len(target & words(c["context"][-1]))
         scored.append((overlap + (1 if c.get("key") == key else 0), -i, c))
@@ -541,9 +569,11 @@ def write_draft(store, number, name, thread, exclude=(), interrupt=None, dated=T
 
     def build():
         parts = []
-        if style.get("notes"):
+        # The style notes and lessons qwen3:4b wrote were its instructions echoed back, so they're only
+        # used once someone turns lessons back on (and has checked lessons.txt and style.json)
+        if LEARN_LESSONS and style.get("notes"):
             parts.append(f"How {OWNER} writes:\n{style['notes']}")
-        if lessons:
+        if LEARN_LESSONS and lessons:
             parts.append(f"What {OWNER} changes in drafts (follow these):\n{lessons}")
         if examples:
             parts.append(f"Some of {OWNER}'s real texts:\n" + "\n".join(f"- {clip(t, 200)}" for t in examples))
@@ -560,7 +590,7 @@ def write_draft(store, number, name, thread, exclude=(), interrupt=None, dated=T
             parts.append(f"Today is {datetime.now():%A %-d %B %Y}.")
         parts.append(f"Conversation with {them} (oldest first):\n{thread_lines(thread, them, chars=300)}")
         parts.append(f"Write {OWNER}'s reply to {them}'s last message. "
-                     + (STYLE_FROM_EXAMPLES if examples or style.get("notes") else STYLE_DEFAULT))
+                     + (STYLE_FROM_EXAMPLES if examples else STYLE_DEFAULT))
         return "\n\n".join(parts)
 
     prompt = build()
@@ -630,6 +660,80 @@ def review_conversation(store, number, name, messages):
         ), "style", max_tokens=250)
         store.save_style_notes(notes)
     return {"summary": summary, "style_notes": notes, "examples_added": added}
+
+
+# ==================== QUICK REPLIES ==================== #
+
+# Most texts only need "Yep" or "No thanks". The model only says what type of message the other
+# person's last text is (sorting is something a small model does well; writing replies from scratch
+# made it copy messages and make things up), and each type has fixed replies in quick_replies.txt.
+# The phone shows them as two buttons, positive first.
+
+QUICK_DEFAULT = """[offer] they offer something, e.g. "Want a cuppa?"
+Yes pls | No thanks
+[favour] they ask for a favour, e.g. "Can you call me?"
+Yes, no worries | Can't right now
+[yes_no] a question yes or no answers, e.g. "Are you home?"
+Yep | Nope
+[news] news or an update that needs no answer
+Ok
+[thanks] they say thanks
+Thanks
+[open] a question yes or no can't answer: what, when, where, how much"""
+
+QUICK_INTRO = triage.load_prompt("quick_system", f"""You sort text messages {OWNER} receives by what kind of \
+reply they need. Answer with JSON only.""")
+
+
+@dataclass
+class QuickType:
+    description: str
+    replies: list  # positive first; empty for types that get no buttons
+
+
+def load_quick_types(text):
+    """quick_replies.txt: "[type] description" headings, each followed by at most one
+    "positive | negative" line; # lines are comments."""
+    types, current = {}, None
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        heading = re.fullmatch(r"\[([\w-]+)\]\s*(.*)", line)
+        if heading:
+            current = types.setdefault(heading.group(1), QuickType(heading.group(2).strip(), []))
+        elif current is None:
+            log.warning("quick_replies.txt: %r is not under a [type] heading, ignored", line[:40])
+        elif current.replies:
+            log.warning("quick_replies.txt: more than one reply line under a type, %r ignored", line[:40])
+        else:
+            current.replies = list(dict.fromkeys(r.strip() for r in line.split("|") if r.strip()))[:2]
+    if len(types) < 2:
+        log.warning("quick_replies.txt has fewer than two types; using the built-in ones")
+        return load_quick_types(QUICK_DEFAULT)
+    return types
+
+
+QUICK_TYPES = load_quick_types(triage.load_prompt("quick_replies", QUICK_DEFAULT))
+QUICK_SYSTEM = QUICK_INTRO + "\n\nTypes:\n" + "\n".join(
+    f"- {name}: {t.description}" for name, t in QUICK_TYPES.items())
+
+
+def quick_replies(number, name, thread):
+    """(type, replies) for the other person's last message. No replies when the owner has already
+    answered it, or for a type with none (an open question)."""
+    thread = [m for m in thread if str(m.get("body") or "").strip()]
+    if not thread or thread[-1].get("from_me"):
+        return "answered", []
+    them = name or "Them"
+    prompt = (f"Conversation with {them}, oldest first:\n{thread_lines(thread[-6:], them, chars=300)}\n\n"
+              f"What type is {them}'s last message?")
+    schema = {"type": "object", "properties": {"type": {"type": "string", "enum": list(QUICK_TYPES)}},
+              "required": ["type"]}
+    kind = ollama_json(QUICK_SYSTEM, prompt, schema, temperature=0, max_tokens=20).get("type")
+    if kind not in QUICK_TYPES:
+        return "unknown", []
+    return kind, QUICK_TYPES[kind].replies
 
 
 # ==================== DEEP REVIEW ==================== #
@@ -725,7 +829,7 @@ class DeepReviewer(threading.Thread):
             draft = write_draft(self.store, number, job.get("name", ""), context, exclude=exclude,
                                 interrupt=self.live.busy, dated=False)
             lines = [str(m.get("body") or "") for m in context if not m.get("from_me")][-3:]
-            if self.store.add_correction(number, lines, draft, sent, "deep review") >= LESSONS_EVERY:
+            if self.store.add_correction(number, lines, draft, sent, "deep review") >= LESSONS_EVERY and LEARN_LESSONS:
                 self.lessons_due = True
         if not os.path.exists(self.store._job_path(number)):
             return True  # forgotten meanwhile
@@ -737,7 +841,7 @@ class DeepReviewer(threading.Thread):
                 log.info("deep review of %s: %d of %d replies", masked(number), job["done"], job["total"])
         else:
             self.store.drop_job(number)
-            self.lessons_due = True
+            self.lessons_due = LEARN_LESSONS
             log.info("deep review of %s finished: %d replies", masked(number), job["total"])
         return True
 
@@ -798,6 +902,7 @@ class App:
         self.routes = {
             "/sms/incoming": self.incoming,
             "/sms/draft": self.draft,
+            "/sms/quick": self.quick,
             "/sms/review": self.review,
             "/sms/forget": self.forget,
             "/sms/feedback": self.feedback,
@@ -828,11 +933,12 @@ class App:
         name = str(req.get("name") or "").strip()
         is_contact = bool(req.get("is_contact"))
         started = time.time()
-        decision = decide_sms(number, name, is_contact, body, messages_of(req, "thread"))
+        decision = forward_contact_text(decide_sms(number, name, is_contact, body, messages_of(req, "thread")),
+                                        is_contact)
         alerted = False
         if decision.topic:
             try:
-                notify_sms(number, name, decision, sent_at)
+                notify_sms(number, name, decision, sent_at, body)
                 alerted = True
             except Exception as err:
                 log.error("ntfy failed: %s", err)
@@ -853,6 +959,13 @@ class App:
         log.info("draft for %s in %.1fs", masked(number), time.time() - started)
         return {"draft": text}
 
+    def quick(self, req):
+        number = normalise_number(required(req, "number"))
+        started = time.time()
+        kind, replies = quick_replies(number, str(req.get("name") or "").strip(), messages_of(req, "thread"))
+        log.info("quick replies for %s: %s, %d in %.1fs", masked(number), kind, len(replies), time.time() - started)
+        return {"kind": kind, "replies": replies}
+
     def review(self, req):
         number = normalise_number(required(req, "number"))
         name = str(req.get("name") or "").strip()
@@ -872,7 +985,7 @@ class App:
         if not draft or not sent or not context:
             raise BadRequest("draft, sent and context are needed")
         same = same_text(draft, sent)
-        if self.store.add_correction(number, context, draft, sent, "phone") >= LESSONS_EVERY:
+        if self.store.add_correction(number, context, draft, sent, "phone") >= LESSONS_EVERY and LEARN_LESSONS:
             self.reviewer.lessons_due = True
         log.info("feedback for %s: draft %s", masked(number), "sent as it was" if same else "changed")
         return {"stored": True, "same": same}
@@ -946,6 +1059,7 @@ def main():
     log.info("Prompts from %s: %s", triage.PROMPTS_DIR, ", ".join(triage.PROMPTS_FROM_FILES) or "none, using built-in")
     queued = sum(len(j["todo"]) for j in app.store.jobs())
     log.info("deep reviews run %s; %d replies queued", f"from {DEEP_HOURS}" if DEEP_HOURS else "any time", queued)
+    log.info("quick replies: %d types; contact texts to ntfy topic %s", len(QUICK_TYPES), SMS_TOPIC or "(off)")
     if PEOPLE:
         log.info("people.txt: %d people, %d alert rules", len(PEOPLE), sum(len(p.rules) for p in PEOPLE.values()))
     server.serve_forever()

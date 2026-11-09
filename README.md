@@ -137,6 +137,11 @@ Android Studio (or JDK 21 and the Android SDK), then:
 Release builds are signed using a `keystore.properties` file in the project root (see
 `keystore.properties_sample`), which is never committed.
 
+This repository is public, so run `scripts/install-hooks.sh` once in a new checkout: every `git push`
+then runs `scripts/check-secrets.sh`, which stops the push if the new commits add keys, tokens,
+passwords, keystores or private details such as home server names, LAN addresses, personal email
+addresses or mobile numbers.
+
 ## Changes from Fossify Messages
 
 Forked from Fossify Messages 1.10.2 (tag `1.10.2`) in November 2026. Changes:
